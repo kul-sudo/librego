@@ -1,5 +1,9 @@
 use macroquad::prelude::*;
-use std::f32::consts::FRAC_PI_2;
+use std::{
+    collections::HashMap,
+    f32::consts::FRAC_PI_2,
+    time::{Duration, Instant},
+};
 
 const FOV: f32 = -80.0;
 
@@ -24,12 +28,23 @@ const CROSSHAIR_LINE_LENGTH: f32 = 8.0;
 const CROSSHAIR_THICKNESS: f32 = 3.0;
 const CROSSHAIR_COLOR: Color = DARKGREEN;
 
+const BULLET_RADIUS: f32 = 0.05;
+const BULLET_COLOR: Color = YELLOW;
+const BULLET_STEP: f32 = 1.0;
+const BULLET_INTERVAL: Duration = Duration::from_millis(100);
+
 fn conf() -> Conf {
     Conf {
         window_title: String::from("Macroquad"),
         fullscreen: true,
         ..Default::default()
     }
+}
+
+struct Bullet {
+    position: Vec3,
+    front: Vec3,
+    // pitch: f32,
 }
 
 #[derive(Default)]
@@ -43,24 +58,70 @@ struct Player {
     right: Vec3,
     up: Vec3,
     position: Vec3,
+    bullets: HashMap<Instant, Bullet>,
+    last_bullet_timestamp: Option<Instant>,
+}
+
+#[derive(Clone, Copy)]
+struct Cube {
+    pos: Vec3,
+    size: Vec3,
+}
+
+impl Cube {
+    fn adjust_if_contains(&self, mut position: Vec3) -> (Vec3, bool) {
+        let mut contains = false;
+        let size_x_half = self.size.x / 2.0;
+        let size_z_half = self.size.z / 2.0;
+
+        if (self.pos.x - size_x_half - COLLISION_GAP..=self.pos.x + size_x_half + COLLISION_GAP)
+            .contains(&position.x)
+            && (self.pos.z - size_z_half - COLLISION_GAP..=self.pos.z + size_z_half + COLLISION_GAP)
+                .contains(&position.z)
+        {
+            contains = true;
+
+            let a = position.distance(self.pos.with_x(self.pos.x - size_x_half));
+            let b = position.distance(self.pos.with_x(self.pos.x + size_x_half));
+            let c = position.distance(self.pos.with_z(self.pos.z - size_z_half));
+            let d = position.distance(self.pos.with_z(self.pos.z + size_z_half));
+
+            if a < b && a < c && a < d {
+                position.x = self.pos.x - size_x_half - COLLISION_GAP;
+            } else if b < a && b < c && b < d {
+                position.x = self.pos.x + size_x_half + COLLISION_GAP;
+            } else if c < a && c < b && c < d {
+                position.z = self.pos.z - size_z_half - COLLISION_GAP;
+            } else {
+                position.z = self.pos.z + size_z_half + COLLISION_GAP;
+            }
+        }
+
+        (position, contains)
+    }
 }
 
 #[derive(Clone, Copy)]
 enum Object {
-    Cube { pos: Vec3, size: Vec3 },
+    Cube(Cube),
 }
 
 const SIZE: f32 = 5.0;
 const COLUMNS: usize = 10;
+const HALF: f32 = COLUMNS as f32 * SIZE / 2.0;
 
 #[macroquad::main(conf)]
 async fn main() {
-    let mut objects = Vec::from([Object::Cube {
-        pos: vec3(9.0, 0.0, 5.0),
-        size: vec3(2.0, 8.0, 2.0),
-    }]);
-
-    let mut grid: [[[Option<Object>; COLUMNS]; COLUMNS]; 4] = [[[None; COLUMNS]; COLUMNS]; 4];
+    let objects = Vec::from([
+        Object::Cube(Cube {
+            pos: vec3(0.0, 0.0, 0.0),
+            size: vec3(2.0, 5.0, 2.0),
+        }),
+        Object::Cube(Cube {
+            pos: vec3(5.0, 0.0, 5.0),
+            size: vec3(2.0, 5.0, 2.0),
+        }),
+    ]);
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -79,6 +140,8 @@ async fn main() {
     player.right = player.front.cross(world_up).normalize();
     player.up = player.right.cross(player.front).normalize();
     player.position = vec3(0.0, CAMERA_Y, 0.0);
+    player.bullets = HashMap::new();
+    player.last_bullet_timestamp = None;
 
     let mut last_mouse_position: Vec2 = mouse_position().into();
 
@@ -95,14 +158,30 @@ async fn main() {
             show_mouse(!grabbed);
         }
 
+        if is_mouse_button_down(MouseButton::Left)
+            && if let Some(last_bullet_timestamp) = player.last_bullet_timestamp {
+                last_bullet_timestamp.elapsed() > BULLET_INTERVAL
+            } else {
+                true
+            }
+        {
+            let now = Instant::now();
+            player.last_bullet_timestamp = Some(now);
+            player.bullets.insert(
+                now,
+                Bullet {
+                    position: player.position + player.front,
+                    front: player.front,
+                },
+            );
+        }
+
         if is_key_pressed(KeyCode::LeftShift) {
             player.walking = !player.walking;
         }
 
-        if is_key_pressed(KeyCode::Space) {
-            if player.jump.is_none() && !player.crouched {
-                player.jump = Some(-JUMP_VELOCITY);
-            }
+        if is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched {
+            player.jump = Some(-JUMP_VELOCITY);
         }
 
         match &mut player.jump {
@@ -150,74 +229,16 @@ async fn main() {
             pos_delta = pos_delta.normalize();
         }
 
-        let mut position = player.position + pos_delta * move_speed;
+        let position = player.position + pos_delta * move_speed;
 
         for object in &objects {
             match object {
-                Object::Cube { pos, size } => {
-                    let size_x_half = size.x / 2.0;
-                    let size_z_half = size.z / 2.0;
-
-                    dbg!(position);
-                    dbg!(pos.with_x(pos.x - size_x_half));
-                    dbg!(pos.with_x(pos.x + size_x_half));
-                    dbg!(pos.with_z(pos.z - size_z_half));
-                    dbg!(pos.with_z(pos.z + size_z_half));
-
-                    // position.x = position.x.clamp(pos.x - size_x_half, pos.x + size_x_half);
-                    // position.z = position.z.clamp(pos.z - size_z_half, pos.z + size_z_half);
-                    if (pos.x - size_x_half - COLLISION_GAP..=pos.x + size_x_half + COLLISION_GAP)
-                        .contains(&position.x)
-                        && (pos.z - size_z_half - COLLISION_GAP
-                            ..=pos.z + size_z_half + COLLISION_GAP)
-                            .contains(&position.z)
-                    {
-                        let a = position.distance(pos.with_x(pos.x - size_x_half));
-                        let b = position.distance(pos.with_x(pos.x + size_x_half));
-                        let c = position.distance(pos.with_z(pos.z - size_z_half));
-                        let d = position.distance(pos.with_z(pos.z + size_z_half));
-
-                        if a < b && a < c && a < d {
-                            position.x = pos.x - size_x_half - COLLISION_GAP;
-                        } else if b < a && b < c && b < d {
-                            position.x = pos.x + size_x_half + COLLISION_GAP;
-                        } else if c < a && c < b && c < d {
-                            position.z = pos.z - size_z_half - COLLISION_GAP;
-                        } else if d < a && d < b && d < c {
-                            position.z = pos.z + size_z_half + COLLISION_GAP;
-                        }
+                Object::Cube(cube) => {
+                    let (adjustment, contains) = cube.adjust_if_contains(position);
+                    player.position = adjustment;
+                    if contains {
+                        break;
                     }
-                    // {
-                    //     if pos.x - size_x_half < position.x {
-                    //         dbg!(pos.x - size_x_half, position.x);
-                    //         position.x = pos.x - size_x_half;
-                    //     }
-                    //     // else if pos.x + size_x_half < position.x {
-                    //     //     position.x = pos.x + size_x_half;
-                    //     // }
-                    //
-                    //     // if pos.z - size_z_half < position.z {
-                    //     //     position.z = pos.z - size_z_half;
-                    //     // }
-                    // // else {
-                    //     //     position.z = pos.z + size_z_half;
-                    //     // }
-                    // }
-
-                    player.position = position;
-
-                    // if ((pos.x - size_x_half..=pos.x + size_x_half).contains(&position.x)
-                    //     && (pos.z - size_z_half..=pos.z + size_z_half).contains(&position.z))
-                    // {
-                    //     player.position.x = position.x.max(pos.x - size_x_half);
-                    //     player.position.x = position.x.max(pos.x + size_x_half);
-                    //
-                    //     player.position.z = position.z.max(pos.z - size_z_half);
-                    //     player.position.z = position.z.max(pos.z + size_z_half);
-                    // } else {
-
-                    // }
-                    draw_cube(*pos, *size, None, BLACK);
                 }
             }
         }
@@ -252,15 +273,46 @@ async fn main() {
             fovy: FOV,
             ..Default::default()
         });
+
         for object in &objects {
             match object {
-                Object::Cube { pos, size } => {
+                Object::Cube(cube) => {
+                    let Cube { pos, size } = cube;
                     draw_cube(*pos, *size, None, BLACK);
                     draw_cube_wires(*pos, *size, WHITE);
                 }
             }
         }
-        draw_grid(COLUMNS as u32, SIZE, BLACK, GRAY);
+
+        let mut removed_bullets = Vec::new();
+        for (started, bullet) in &mut player.bullets {
+            bullet.position += BULLET_STEP * bullet.front;
+            draw_sphere(bullet.position, BULLET_RADIUS, None, BULLET_COLOR);
+
+            for object in &objects {
+                match object {
+                    Object::Cube(cube) => {
+                        if !(-HALF..HALF).contains(&bullet.position.x)
+                            || !(-HALF..HALF).contains(&bullet.position.z)
+                            || cube.adjust_if_contains(bullet.position).1
+                        {
+                            removed_bullets.push(*started)
+                        }
+                    }
+                }
+            }
+        }
+
+        for timestamp in &removed_bullets {
+            player.bullets.remove(timestamp);
+        }
+
+        draw_cube(
+            vec3(0.0, 0.0, 0.0),
+            vec3((COLUMNS as f32) * SIZE, 0.0, (COLUMNS as f32) * SIZE),
+            None,
+            GRAY,
+        );
 
         set_default_camera();
         draw_line(
