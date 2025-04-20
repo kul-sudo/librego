@@ -1,37 +1,15 @@
+mod bullet;
+mod consts;
+mod object;
+mod player;
+
+use ::rand::{Rng, SeedableRng, rngs::StdRng};
+use bullet::Bullet;
+use consts::*;
 use macroquad::prelude::*;
-use std::{
-    collections::HashMap,
-    f32::consts::FRAC_PI_2,
-    time::{Duration, Instant},
-};
-
-const FOV: f32 = -80.0;
-
-const PITCH_BOUND: f32 = FRAC_PI_2 * 0.99;
-
-const GRAVITY: f32 = 0.005;
-
-const MOVE_SPEED: f32 = 0.05;
-const LOOK_SPEED: f32 = 0.05;
-
-const JUMP_VELOCITY: f32 = 0.1;
-
-const CAMERA_Y: f32 = 1.0;
-const CROUCH_SPEED_CONST: f32 = 0.3;
-const WALKING_SPEED_CONST: f32 = 0.5;
-
-const CROUCH_LEVEL_CONST: f32 = 0.3;
-
-const COLLISION_GAP: f32 = 0.1;
-
-const CROSSHAIR_LINE_LENGTH: f32 = 8.0;
-const CROSSHAIR_THICKNESS: f32 = 3.0;
-const CROSSHAIR_COLOR: Color = DARKGREEN;
-
-const BULLET_RADIUS: f32 = 0.05;
-const BULLET_COLOR: Color = YELLOW;
-const BULLET_STEP: f32 = 1.0;
-const BULLET_INTERVAL: Duration = Duration::from_millis(100);
+use object::{Cube, Object};
+use player::Player;
+use std::{collections::HashMap, time::Instant};
 
 fn conf() -> Conf {
     Conf {
@@ -41,77 +19,10 @@ fn conf() -> Conf {
     }
 }
 
-struct Bullet {
-    position: Vec3,
-    front: Vec3,
-    // pitch: f32,
-}
-
-#[derive(Default)]
-struct Player {
-    crouched: bool,
-    walking: bool,
-    jump: Option<f32>,
-    yaw: f32,
-    pitch: f32,
-    front: Vec3,
-    right: Vec3,
-    up: Vec3,
-    position: Vec3,
-    bullets: HashMap<Instant, Bullet>,
-    last_bullet_timestamp: Option<Instant>,
-}
-
-#[derive(Clone, Copy)]
-struct Cube {
-    pos: Vec3,
-    size: Vec3,
-}
-
-impl Cube {
-    fn adjust_if_contains(&self, mut position: Vec3) -> (Vec3, bool) {
-        let mut contains = false;
-        let size_x_half = self.size.x / 2.0;
-        let size_z_half = self.size.z / 2.0;
-
-        if (self.pos.x - size_x_half - COLLISION_GAP..=self.pos.x + size_x_half + COLLISION_GAP)
-            .contains(&position.x)
-            && (self.pos.z - size_z_half - COLLISION_GAP..=self.pos.z + size_z_half + COLLISION_GAP)
-                .contains(&position.z)
-        {
-            contains = true;
-
-            let a = position.distance(self.pos.with_x(self.pos.x - size_x_half));
-            let b = position.distance(self.pos.with_x(self.pos.x + size_x_half));
-            let c = position.distance(self.pos.with_z(self.pos.z - size_z_half));
-            let d = position.distance(self.pos.with_z(self.pos.z + size_z_half));
-
-            if a < b && a < c && a < d {
-                position.x = self.pos.x - size_x_half - COLLISION_GAP;
-            } else if b < a && b < c && b < d {
-                position.x = self.pos.x + size_x_half + COLLISION_GAP;
-            } else if c < a && c < b && c < d {
-                position.z = self.pos.z - size_z_half - COLLISION_GAP;
-            } else {
-                position.z = self.pos.z + size_z_half + COLLISION_GAP;
-            }
-        }
-
-        (position, contains)
-    }
-}
-
-#[derive(Clone, Copy)]
-enum Object {
-    Cube(Cube),
-}
-
-const SIZE: f32 = 5.0;
-const COLUMNS: usize = 10;
-const HALF: f32 = COLUMNS as f32 * SIZE / 2.0;
-
 #[macroquad::main(conf)]
 async fn main() {
+    let mut rng = StdRng::from_os_rng();
+
     let objects = Vec::from([
         Object::Cube(Cube {
             pos: vec3(0.0, 0.0, 0.0),
@@ -151,6 +62,7 @@ async fn main() {
 
     loop {
         let delta = get_frame_time();
+        let mut moved = player.jump.is_some();
 
         if is_key_pressed(KeyCode::Tab) {
             grabbed = !grabbed;
@@ -158,29 +70,12 @@ async fn main() {
             show_mouse(!grabbed);
         }
 
-        if is_mouse_button_down(MouseButton::Left)
-            && if let Some(last_bullet_timestamp) = player.last_bullet_timestamp {
-                last_bullet_timestamp.elapsed() > BULLET_INTERVAL
-            } else {
-                true
-            }
-        {
-            let now = Instant::now();
-            player.last_bullet_timestamp = Some(now);
-            player.bullets.insert(
-                now,
-                Bullet {
-                    position: player.position + player.front,
-                    front: player.front,
-                },
-            );
-        }
-
         if is_key_pressed(KeyCode::LeftShift) {
             player.walking = !player.walking;
         }
 
         if is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched {
+            moved = true;
             player.jump = Some(-JUMP_VELOCITY);
         }
 
@@ -214,15 +109,19 @@ async fn main() {
         let mut pos_delta = Vec3::ZERO;
         if is_key_down(KeyCode::W) {
             pos_delta += player.front;
+            moved = true;
         }
         if is_key_down(KeyCode::S) {
             pos_delta -= player.front;
+            moved = true;
         }
         if is_key_down(KeyCode::A) {
             pos_delta -= player.right;
+            moved = true;
         }
         if is_key_down(KeyCode::D) {
             pos_delta += player.right;
+            moved = true;
         }
 
         if pos_delta.length() > 0.0 {
@@ -242,7 +141,6 @@ async fn main() {
                 }
             }
         }
-        // draw_cube(vec3(2.0, 1.0, 2.0), vec3(5.0, 5.0, 9.0), None, BLACK);
 
         let mouse_position: Vec2 = mouse_position().into();
         let mouse_delta = mouse_position - last_mouse_position;
@@ -262,6 +160,25 @@ async fn main() {
 
             player.right = player.front.cross(world_up).normalize();
             player.up = player.right.cross(player.front).normalize();
+        }
+
+        if is_mouse_button_down(MouseButton::Left)
+            && if let Some(last_bullet_timestamp) = player.last_bullet_timestamp {
+                last_bullet_timestamp.elapsed() > BULLET_INTERVAL
+            } else {
+                true
+            }
+        {
+            let now = Instant::now();
+            player.last_bullet_timestamp = Some(now);
+            player.bullets.insert(
+                now,
+                Bullet {
+                    position: player.position + player.front,
+                    front: player.front
+                        + moved as usize as f32 * rng.random_range(0.0..BULLET_SPREAD),
+                },
+            );
         }
 
         clear_background(LIGHTGRAY);
