@@ -9,7 +9,10 @@ use consts::*;
 use macroquad::prelude::*;
 use object::{Cube, Object};
 use player::Player;
-use std::{collections::HashMap, time::Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 fn conf() -> Conf {
     Conf {
@@ -53,6 +56,7 @@ async fn main() {
     player.position = vec3(0.0, CAMERA_Y, 0.0);
     player.bullets = HashMap::new();
     player.last_bullet_timestamp = None;
+    player.last_move_timestamp = None;
 
     let mut last_mouse_position: Vec2 = mouse_position().into();
 
@@ -62,7 +66,7 @@ async fn main() {
 
     loop {
         let delta = get_frame_time();
-        let mut moved = player.jump.is_some();
+        let mut moved = false;
 
         if is_key_pressed(KeyCode::Tab) {
             grabbed = !grabbed;
@@ -75,7 +79,6 @@ async fn main() {
         }
 
         if is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched {
-            moved = true;
             player.jump = Some(-JUMP_VELOCITY);
         }
 
@@ -123,6 +126,11 @@ async fn main() {
             pos_delta += player.right;
             moved = true;
         }
+        if (moved && player.last_move_timestamp.is_none()) {
+            player.last_move_timestamp = Some(Instant::now());
+        } else if !moved {
+            player.last_move_timestamp = None;
+        }
 
         if pos_delta.length() > 0.0 {
             pos_delta = pos_delta.normalize();
@@ -169,19 +177,41 @@ async fn main() {
                 true
             }
         {
+            let inaccurate = !player.crouched && (player.jump.is_some() || moved);
             let now = Instant::now();
             player.last_bullet_timestamp = Some(now);
+
+            let spread_level = match player.last_move_timestamp {
+                Some(timestamp) => {
+                    timestamp.elapsed().as_nanos() as f32 / BULLET_SPREAD_PERIOD.as_nanos() as f32
+                }
+                None => 0.0,
+            }
+            .min(1.0);
+
             player.bullets.insert(
                 now,
                 Bullet {
                     position: player.position + player.front,
-                    front: player.front
-                        + moved as usize as f32 * rng.random_range(0.0..BULLET_SPREAD),
+                    front: vec3(
+                        player.front.x
+                            + inaccurate as usize as f32
+                                * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                                * spread_level,
+                        player.front.y
+                            + inaccurate as usize as f32
+                                * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                                * spread_level,
+                        player.front.z
+                            + inaccurate as usize as f32
+                                * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                                * spread_level,
+                    ),
                 },
             );
         }
 
-        clear_background(LIGHTGRAY);
+        clear_background(BLACK);
 
         set_camera(&Camera3D {
             position: player.position,

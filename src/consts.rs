@@ -31,7 +31,8 @@ pub const BULLET_RADIUS: f32 = 0.05;
 pub const BULLET_COLOR: Color = YELLOW;
 pub const BULLET_STEP: f32 = 2.0;
 pub const BULLET_INTERVAL: Duration = Duration::from_millis(100);
-pub const BULLET_SPREAD: f32 = PI;
+pub static BULLET_SPREAD: f32 = PI / 10.0;
+pub const BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(6);
 
 pub const SIZE: f32 = 5.0;
 pub const COLUMNS: usize = 10;

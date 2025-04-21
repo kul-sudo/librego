@@ -15,4 +15,5 @@ pub struct Player {
     pub position: Vec3,
     pub bullets: HashMap<Instant, Bullet>,
     pub last_bullet_timestamp: Option<Instant>,
+    pub last_move_timestamp: Option<Instant>,
 }
