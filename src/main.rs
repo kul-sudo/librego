@@ -207,6 +207,7 @@ async fn main() {
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
                     ),
+                    born: Instant::now(),
                 },
             );
         }
@@ -231,6 +232,8 @@ async fn main() {
             }
         }
 
+        // dbg!(player.bullets.len());
+
         let mut removed_bullets = Vec::new();
         for (started, bullet) in &mut player.bullets {
             bullet.position += BULLET_STEP * bullet.front;
@@ -242,7 +245,9 @@ async fn main() {
                         if !(-HALF..HALF).contains(&bullet.position.x)
                             || !(-HALF..HALF).contains(&bullet.position.z)
                             || cube.adjust_if_contains(bullet.position).1
+                            || bullet.born.elapsed() > BULLET_LIFETIME
                         {
+                            dbg!(bullet.born.elapsed().as_nanos() as f32 / BULLET_LIFETIME.as_nanos() as f32);
                             removed_bullets.push(*started)
                         }
                     }
