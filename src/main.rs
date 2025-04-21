@@ -8,11 +8,13 @@ use bullet::Bullet;
 use consts::*;
 use macroquad::prelude::*;
 use object::{Cube, Object};
-use player::Player;
-use std::{
-    collections::HashMap,
-    time::{Duration, Instant},
+use parry3d::{
+    bounding_volume::Aabb,
+    bounding_volume::BoundingVolume,
+    math::{Point, Vector},
 };
+use player::Player;
+use std::{collections::HashMap, f32::consts::PI, time::Instant};
 
 fn conf() -> Conf {
     Conf {
@@ -26,16 +28,10 @@ fn conf() -> Conf {
 async fn main() {
     let mut rng = StdRng::from_os_rng();
 
-    let objects = Vec::from([
-        Object::Cube(Cube {
-            pos: vec3(0.0, 0.0, 0.0),
-            size: vec3(2.0, 5.0, 2.0),
-        }),
-        Object::Cube(Cube {
-            pos: vec3(5.0, 0.0, 5.0),
-            size: vec3(2.0, 5.0, 2.0),
-        }),
-    ]);
+    let objects = Vec::from([Object::Cube(Cube {
+        pos: vec3(5.0, 0.0, 0.0),
+        size: vec3(2.0, 5.0, 2.0),
+    })]);
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -80,6 +76,9 @@ async fn main() {
 
         if is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched {
             player.jump = Some(-JUMP_VELOCITY);
+            if player.last_move_timestamp.is_none() {
+                player.last_move_timestamp = Some(Instant::now());
+            }
         }
 
         match &mut player.jump {
@@ -126,9 +125,9 @@ async fn main() {
             pos_delta += player.right;
             moved = true;
         }
-        if (moved && player.last_move_timestamp.is_none()) {
+        if moved && player.last_move_timestamp.is_none() {
             player.last_move_timestamp = Some(Instant::now());
-        } else if !moved {
+        } else if !moved && player.jump.is_none() {
             player.last_move_timestamp = None;
         }
 
@@ -141,11 +140,34 @@ async fn main() {
         for object in &objects {
             match object {
                 Object::Cube(cube) => {
-                    let (adjustment, contains) = cube.adjust_if_contains(position);
-                    player.position = adjustment;
-                    if contains {
-                        break;
-                    }
+                    let aabb = Aabb::from_half_extents(
+                        Point::new(cube.pos.x, cube.pos.y, cube.pos.z),
+                        Vector::new(
+                            cube.size.x / 2.0 + COLLISION_GAP,
+                            cube.size.y / 2.0 + COLLISION_GAP,
+                            cube.size.z / 2.0 + COLLISION_GAP,
+                        ),
+                    );
+
+                    if aabb
+                        .intersection(&Aabb::new(
+                            Point::new(position.x, player.position.y, player.position.z),
+                            Point::new(position.x, player.position.y, player.position.z),
+                        ))
+                        .is_none()
+                    {
+                        player.position.x = position.x;
+                    };
+
+                    if aabb
+                        .intersection(&Aabb::new(
+                            Point::new(player.position.x, player.position.y, position.z),
+                            Point::new(player.position.x, player.position.y, position.z),
+                        ))
+                        .is_none()
+                    {
+                        player.position.z = position.z;
+                    };
                 }
             }
         }
@@ -192,17 +214,17 @@ async fn main() {
             player.bullets.insert(
                 now,
                 Bullet {
-                    position: player.position + player.front,
+                    position: player.position,
                     front: vec3(
-                        player.front.x
+                        player.front.x / FOV
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.y
+                        player.front.y / FOV
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.z
+                        player.front.z / FOV
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
@@ -232,8 +254,6 @@ async fn main() {
             }
         }
 
-        // dbg!(player.bullets.len());
-
         let mut removed_bullets = Vec::new();
         for (started, bullet) in &mut player.bullets {
             bullet.position += BULLET_STEP * bullet.front;
@@ -244,10 +264,20 @@ async fn main() {
                     Object::Cube(cube) => {
                         if !(-HALF..HALF).contains(&bullet.position.x)
                             || !(-HALF..HALF).contains(&bullet.position.z)
-                            || cube.adjust_if_contains(bullet.position).1
+                            || Aabb::from_half_extents(
+                                Point::new(cube.pos.x, cube.pos.y, cube.pos.z),
+                                Vector::new(
+                                    cube.size.x / 2.0,
+                                    cube.size.y / 2.0,
+                                    cube.size.z / 2.0,
+                                ),
+                            )
+                            .intersects(&Aabb::new(
+                                Point::new(bullet.position.x, bullet.position.y, bullet.position.z),
+                                Point::new(bullet.position.x, bullet.position.y, bullet.position.z),
+                            ))
                             || bullet.born.elapsed() > BULLET_LIFETIME
                         {
-                            dbg!(bullet.born.elapsed().as_nanos() as f32 / BULLET_LIFETIME.as_nanos() as f32);
                             removed_bullets.push(*started)
                         }
                     }

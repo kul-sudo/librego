@@ -1,12 +1,13 @@
 use macroquad::prelude::*;
 use std::{
-    f32::consts::{FRAC_PI_2, PI},
+    f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8, PI},
     time::Duration,
 };
 
-pub const FOV: f32 = -80.0;
+pub const DEFAULT_FOV: f32 = FRAC_PI_8;
+pub const FOV: f32 = FRAC_PI_4;
 
-pub const PITCH_BOUND: f32 = FRAC_PI_2 * 0.99;
+pub const PITCH_BOUND: f32 = FRAC_PI_2 * 0.999;
 
 pub const GRAVITY: f32 = 0.005;
 
@@ -29,7 +30,7 @@ pub const CROSSHAIR_COLOR: Color = DARKGREEN;
 
 pub const BULLET_RADIUS: f32 = 0.05;
 pub const BULLET_COLOR: Color = YELLOW;
-pub const BULLET_STEP: f32 = 2.0;
+pub const BULLET_STEP: f32 = 1.0 * FOV / DEFAULT_FOV;
 pub static BULLET_INTERVAL: Duration = Duration::from_millis(100);
 pub static BULLET_SPREAD: f32 = PI / 10.0;
 pub static BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(6);
