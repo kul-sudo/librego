@@ -16,4 +16,6 @@ pub struct Player {
     pub bullets: HashMap<Instant, Bullet>,
     pub last_bullet_timestamp: Option<Instant>,
     pub last_move_timestamp: Option<Instant>,
+    pub bullets_since_last_reload: u8,
+    pub last_reload_timestamp: Option<Instant>,
 }

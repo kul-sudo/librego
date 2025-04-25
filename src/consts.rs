@@ -4,8 +4,8 @@ use std::{
     time::Duration,
 };
 
-pub const DEFAULT_FOV: f32 = FRAC_PI_8;
-pub const FOV: f32 = FRAC_PI_4;
+pub const DEFAULT_SCREEN_SIZE: Vec2 = vec2(1920.0, 1080.0);
+pub const FOV: f32 = FRAC_PI_2;
 
 pub const PITCH_BOUND: f32 = FRAC_PI_2 * 0.999;
 
@@ -30,12 +30,15 @@ pub const CROSSHAIR_COLOR: Color = DARKGREEN;
 
 pub const BULLET_RADIUS: f32 = 0.05;
 pub const BULLET_COLOR: Color = YELLOW;
-pub const BULLET_STEP: f32 = 1.0 * FOV / DEFAULT_FOV;
+pub const BULLET_STEP: f32 = 3.0;
 pub static BULLET_INTERVAL: Duration = Duration::from_millis(100);
 pub static BULLET_SPREAD: f32 = PI / 10.0;
-pub static BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(6);
+pub static BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(10);
 pub static BULLET_LIFETIME: Duration =
     Duration::from_secs((COLUMNS as f32 * SIZE / BULLET_STEP) as u64);
+pub const BULLETS_BEFORE_RELOAD: u8 = 30;
+pub const RELOAD_DURATION: Duration = Duration::from_secs(2);
+pub const BULLETS_FONT_SIZE: u16 = 35;
 
 pub const SIZE: f32 = 5.0;
 pub const COLUMNS: usize = 10;

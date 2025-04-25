@@ -16,22 +16,41 @@ use parry3d::{
 use player::Player;
 use std::{collections::HashMap, f32::consts::PI, time::Instant};
 
-fn conf() -> Conf {
+fn window_conf() -> Conf {
     Conf {
-        window_title: String::from("Macroquad"),
+        window_title: "librego".to_owned(),
         fullscreen: true,
+        platform: miniquad::conf::Platform {
+            linux_backend: miniquad::conf::LinuxBackend::WaylandWithX11Fallback,
+            ..Default::default()
+        },
         ..Default::default()
     }
 }
 
-#[macroquad::main(conf)]
+#[macroquad::main(window_conf)]
 async fn main() {
+    for _ in 0..8 {
+        set_fullscreen(true);
+        next_frame().await;
+    }
+
     let mut rng = StdRng::from_os_rng();
 
-    let objects = Vec::from([Object::Cube(Cube {
-        pos: vec3(5.0, 0.0, 0.0),
-        size: vec3(2.0, 5.0, 2.0),
-    })]);
+    let objects = Vec::from([
+        Object::Cube(Cube {
+            pos: vec3(5.0, 0.0, 0.0),
+            size: vec3(2.0, 5.0, 2.0),
+        }),
+        Object::Cube(Cube {
+            pos: vec3(7.0, 0.0, 0.0),
+            size: vec3(2.0, 5.0, 2.0),
+        }),
+        Object::Cube(Cube {
+            pos: vec3(7.0, 0.0, 2.0),
+            size: vec3(2.0, 5.0, 2.0),
+        }),
+    ]);
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -59,6 +78,10 @@ async fn main() {
     let mut grabbed = true;
     set_cursor_grab(grabbed);
     show_mouse(false);
+
+    set_fullscreen(true);
+
+    let screen_size = vec2(screen_width(), screen_height());
 
     loop {
         let delta = get_frame_time();
@@ -125,6 +148,12 @@ async fn main() {
             pos_delta += player.right;
             moved = true;
         }
+
+        if is_key_pressed(KeyCode::R) {
+            player.bullets_since_last_reload = 0;
+            player.last_reload_timestamp = Some(Instant::now());
+        }
+
         if moved && player.last_move_timestamp.is_none() {
             player.last_move_timestamp = Some(Instant::now());
         } else if !moved && player.jump.is_none() {
@@ -137,6 +166,9 @@ async fn main() {
 
         let position = player.position + pos_delta * move_speed;
 
+        let current_pos = player.position;
+
+        let mut no_intersection_detected = true;
         for object in &objects {
             match object {
                 Object::Cube(cube) => {
@@ -149,27 +181,33 @@ async fn main() {
                         ),
                     );
 
-                    if aabb
-                        .intersection(&Aabb::new(
-                            Point::new(position.x, player.position.y, player.position.z),
-                            Point::new(position.x, player.position.y, player.position.z),
-                        ))
-                        .is_none()
-                    {
+                    let x_intersection = aabb.intersects(&Aabb::new(
+                        Point::new(position.x, current_pos.y, current_pos.z),
+                        Point::new(position.x, current_pos.y, current_pos.z),
+                    ));
+                    let y_intersection = aabb.intersects(&Aabb::new(
+                        Point::new(current_pos.x, current_pos.y, position.z),
+                        Point::new(current_pos.x, current_pos.y, position.z),
+                    ));
+
+                    if !x_intersection && !y_intersection {
+                        continue;
+                    }
+
+                    no_intersection_detected = false;
+
+                    if !x_intersection {
                         player.position.x = position.x;
                     };
-
-                    if aabb
-                        .intersection(&Aabb::new(
-                            Point::new(player.position.x, player.position.y, position.z),
-                            Point::new(player.position.x, player.position.y, position.z),
-                        ))
-                        .is_none()
-                    {
+                    if !y_intersection {
                         player.position.z = position.z;
                     };
                 }
             }
+        }
+
+        if no_intersection_detected {
+            player.position = position;
         }
 
         let mouse_position: Vec2 = mouse_position().into();
@@ -193,12 +231,20 @@ async fn main() {
         }
 
         if is_mouse_button_down(MouseButton::Left)
+            && player.bullets_since_last_reload < BULLETS_BEFORE_RELOAD
+            && if let Some(last_reload_timestamp) = player.last_reload_timestamp {
+                last_reload_timestamp.elapsed() > RELOAD_DURATION
+            } else {
+                true
+            }
             && if let Some(last_bullet_timestamp) = player.last_bullet_timestamp {
                 last_bullet_timestamp.elapsed() > BULLET_INTERVAL
             } else {
                 true
             }
         {
+            player.bullets_since_last_reload += 1;
+
             let inaccurate = !player.crouched && (player.jump.is_some() || moved);
             let now = Instant::now();
             player.last_bullet_timestamp = Some(now);
@@ -297,21 +343,42 @@ async fn main() {
         );
 
         set_default_camera();
+
         draw_line(
-            screen_width() / 2.0 - CROSSHAIR_LINE_LENGTH,
-            screen_height() / 2.0,
-            screen_width() / 2.0 + CROSSHAIR_LINE_LENGTH,
-            screen_height() / 2.0,
+            screen_size.x / 2.0 - CROSSHAIR_LINE_LENGTH,
+            screen_size.y / 2.0,
+            screen_size.x / 2.0 + CROSSHAIR_LINE_LENGTH,
+            screen_size.y / 2.0,
             CROSSHAIR_THICKNESS,
             CROSSHAIR_COLOR,
         );
         draw_line(
-            screen_width() / 2.0,
-            screen_height() / 2.0 - CROSSHAIR_LINE_LENGTH,
-            screen_width() / 2.0,
-            screen_height() / 2.0 + CROSSHAIR_LINE_LENGTH,
+            screen_size.x / 2.0,
+            screen_size.y / 2.0 - CROSSHAIR_LINE_LENGTH,
+            screen_size.x / 2.0,
+            screen_size.y / 2.0 + CROSSHAIR_LINE_LENGTH,
             CROSSHAIR_THICKNESS,
             CROSSHAIR_COLOR,
+        );
+
+        let bullets_text = format!(
+            "{}/{}",
+            BULLETS_BEFORE_RELOAD - player.bullets_since_last_reload,
+            BULLETS_BEFORE_RELOAD
+        );
+        let bullets_text_measured = measure_text(
+            &bullets_text,
+            None,
+            (BULLETS_FONT_SIZE as f32 * (screen_size.x * screen_size.y)
+                / (DEFAULT_SCREEN_SIZE.x * DEFAULT_SCREEN_SIZE.y)) as u16,
+            1.0,
+        );
+        draw_text(
+            &bullets_text,
+            screen_size.x - bullets_text_measured.width,
+            bullets_text_measured.height,
+            BULLETS_FONT_SIZE as f32,
+            WHITE,
         );
 
         next_frame().await
