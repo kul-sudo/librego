@@ -9,12 +9,15 @@ use consts::*;
 use macroquad::prelude::*;
 use object::{Cube, Object};
 use parry3d::{
-    bounding_volume::Aabb,
     bounding_volume::BoundingVolume,
-    math::{Point, Vector},
+    math::{Isometry, Vector},
+    query,
+    shape::{Ball, Compound, Cuboid, SharedShape},
 };
 use player::Player;
-use std::{collections::HashMap, f32::consts::PI, time::Instant};
+use std::{collections::HashMap, time::Instant};
+
+const PLAYER_SIZE: f32 = 0.0;
 
 fn window_conf() -> Conf {
     Conf {
@@ -37,20 +40,47 @@ async fn main() {
 
     let mut rng = StdRng::from_os_rng();
 
-    let objects = Vec::from([
-        Object::Cube(Cube {
-            pos: vec3(5.0, 0.0, 0.0),
+    let compounds = [(
+        Cube {
+            pos: vec3(5.0, 1.0, 0.0),
             size: vec3(2.0, 5.0, 2.0),
-        }),
-        Object::Cube(Cube {
-            pos: vec3(7.0, 0.0, 0.0),
+        },
+        Cube {
+            pos: vec3(7.0, 1.0, 2.0),
             size: vec3(2.0, 5.0, 2.0),
-        }),
-        Object::Cube(Cube {
-            pos: vec3(7.0, 0.0, 2.0),
-            size: vec3(2.0, 5.0, 2.0),
-        }),
+        },
+    )];
+    let mut objects = Vec::from([
+        // Object::Cube(Cube {
+        //     pos: vec3(5.0, 0.0, 0.0),
+        //     size: vec3(2.0, 5.0, 2.0),
+        // }),
+        // Object::Cube(Cube {
+        //     pos: vec3(7.0, 0.0, 2.0),
+        //     size: vec3(2.0, 5.0, 2.0),
+        // }),
     ]);
+
+    for (lhs, rhs) in compounds {
+        objects.push(Object::Compound(Compound::new(vec![
+            (
+                Isometry::translation(lhs.pos.x, lhs.pos.y, lhs.pos.z),
+                SharedShape::new(Cuboid::new(Vector::new(
+                    lhs.size.x / 2.0,
+                    lhs.size.y / 2.0,
+                    lhs.size.z / 2.0,
+                ))),
+            ),
+            (
+                Isometry::translation(rhs.pos.x, rhs.pos.y, rhs.pos.z),
+                SharedShape::new(Cuboid::new(Vector::new(
+                    rhs.size.x / 2.0,
+                    rhs.size.y / 2.0,
+                    rhs.size.z / 2.0,
+                ))),
+            ),
+        ])));
+    }
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -171,26 +201,36 @@ async fn main() {
         let mut no_intersection_detected = true;
         for object in &objects {
             match object {
-                Object::Cube(cube) => {
-                    let aabb = Aabb::from_half_extents(
-                        Point::new(cube.pos.x, cube.pos.y, cube.pos.z),
-                        Vector::new(
-                            cube.size.x / 2.0 + COLLISION_GAP,
-                            cube.size.y / 2.0 + COLLISION_GAP,
-                            cube.size.z / 2.0 + COLLISION_GAP,
-                        ),
-                    );
-
-                    let x_intersection = aabb.intersects(&Aabb::new(
-                        Point::new(position.x, current_pos.y, current_pos.z),
-                        Point::new(position.x, current_pos.y, current_pos.z),
-                    ));
-                    let y_intersection = aabb.intersects(&Aabb::new(
-                        Point::new(current_pos.x, current_pos.y, position.z),
-                        Point::new(current_pos.x, current_pos.y, position.z),
+                Object::Compound(compound) => {
+                    let player_cuboid = Cuboid::new(Vector::new(
+                        PLAYER_SIZE / 2.0,
+                        PLAYER_SIZE / 2.0,
+                        PLAYER_SIZE / 2.0,
                     ));
 
-                    if !x_intersection && !y_intersection {
+                    let x_intersection = query::intersection_test(
+                        &Isometry::identity(),
+                        compound,
+                        &Isometry::translation(position.x, current_pos.y, current_pos.z),
+                        &player_cuboid,
+                    )
+                    .unwrap();
+                    let y_intersection = query::intersection_test(
+                        &Isometry::identity(),
+                        compound,
+                        &Isometry::translation(current_pos.x, position.y, current_pos.z),
+                        &player_cuboid,
+                    )
+                    .unwrap();
+                    let z_intersection = query::intersection_test(
+                        &Isometry::identity(),
+                        compound,
+                        &Isometry::translation(current_pos.x, current_pos.y, position.z),
+                        &player_cuboid,
+                    )
+                    .unwrap();
+
+                    if !x_intersection && !y_intersection && !z_intersection {
                         continue;
                     }
 
@@ -200,6 +240,9 @@ async fn main() {
                         player.position.x = position.x;
                     };
                     if !y_intersection {
+                        player.position.y = position.y;
+                    };
+                    if !z_intersection {
                         player.position.z = position.z;
                     };
                 }
@@ -292,10 +335,22 @@ async fn main() {
 
         for object in &objects {
             match object {
-                Object::Cube(cube) => {
-                    let Cube { pos, size } = cube;
-                    draw_cube(*pos, *size, None, BLACK);
-                    draw_cube_wires(*pos, *size, WHITE);
+                Object::Compound(compound) => {
+                    for (isometry, shape) in compound.shapes() {
+                        let pos = isometry.translation.vector;
+                        let size = shape.as_cuboid().unwrap().half_extents;
+                        draw_cube(
+                            Vec3::from_slice(pos.as_slice()),
+                            Vec3::from_slice(size.as_slice()) * 2.0,
+                            None,
+                            BLACK,
+                        );
+                        draw_cube_wires(
+                            Vec3::from_slice(pos.as_slice()),
+                            Vec3::from_slice(size.as_slice()) * 2.0,
+                            WHITE,
+                        );
+                    }
                 }
             }
         }
@@ -303,29 +358,42 @@ async fn main() {
         let mut removed_bullets = Vec::new();
         for (started, bullet) in &mut player.bullets {
             bullet.position += BULLET_STEP * bullet.front;
-            draw_sphere(bullet.position, BULLET_RADIUS, None, BULLET_COLOR);
+
+            // if !(-HALF..HALF).contains(&bullet.position.x)
+            //     || !(-HALF..HALF).contains(&bullet.position.z)
+            // {
+            //     removed_bullets.push(*started);
+            //     continue;
+            // }
 
             for object in &objects {
                 match object {
-                    Object::Cube(cube) => {
-                        if !(-HALF..HALF).contains(&bullet.position.x)
-                            || !(-HALF..HALF).contains(&bullet.position.z)
-                            || Aabb::from_half_extents(
-                                Point::new(cube.pos.x, cube.pos.y, cube.pos.z),
-                                Vector::new(
-                                    cube.size.x / 2.0,
-                                    cube.size.y / 2.0,
-                                    cube.size.z / 2.0,
+                    Object::Compound(compound) => {
+                        if compound.shapes().iter().any(|(isometry, shape)| {
+                            let ball = Ball::new(BULLET_RADIUS);
+
+                            let cuboid = shape.as_cuboid().unwrap();
+
+                            query::intersection_test(
+                                &Isometry::translation(
+                                    bullet.position.x,
+                                    bullet.position.y,
+                                    bullet.position.z,
+                                ),
+                                &ball,
+                                isometry,
+                                &Cuboid::new(
+                                    Vector::new(
+                                        cuboid.half_extents.x,
+                                        cuboid.half_extents.y,
+                                        cuboid.half_extents.z,
+                                    ),
                                 ),
                             )
-                            .intersects(&Aabb::new(
-                                Point::new(bullet.position.x, bullet.position.y, bullet.position.z),
-                                Point::new(bullet.position.x, bullet.position.y, bullet.position.z),
-                            ))
-                            || bullet.born.elapsed() > BULLET_LIFETIME
-                        {
-                            removed_bullets.push(*started)
-                        }
+                            .unwrap()
+                        }) {
+                            removed_bullets.push(*started);
+                        };
                     }
                 }
             }
@@ -333,6 +401,9 @@ async fn main() {
 
         for timestamp in &removed_bullets {
             player.bullets.remove(timestamp);
+        }
+        for (started, bullet) in &mut player.bullets {
+            draw_sphere(bullet.position, BULLET_RADIUS, None, BULLET_COLOR);
         }
 
         draw_cube(

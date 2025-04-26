@@ -1,6 +1,6 @@
 use macroquad::prelude::*;
 use std::{
-    f32::consts::{FRAC_PI_2, FRAC_PI_4, FRAC_PI_8, PI},
+    f32::consts::{FRAC_PI_2, PI},
     time::Duration,
 };
 

@@ -1,13 +1,13 @@
-use crate::consts::COLLISION_GAP;
 use macroquad::prelude::*;
+use parry3d::shape::Compound;
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct Cube {
     pub pos: Vec3,
     pub size: Vec3,
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Object {
-    Cube(Cube),
+    Compound(Compound),
 }
