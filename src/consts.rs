@@ -9,18 +9,17 @@ pub const FOV: f32 = FRAC_PI_2;
 
 pub const PITCH_BOUND: f32 = FRAC_PI_2 * 0.999;
 
-pub const GRAVITY: f32 = 0.005;
-
 pub const MOVE_SPEED: f32 = 0.05;
 pub const LOOK_SPEED: f32 = 0.05;
 
-pub const JUMP_VELOCITY: f32 = 0.1;
+pub const JUMP_VELOCITY: f32 = 0.06;
+pub const GRAVITY: f32 = 0.0035;
 
 pub const CAMERA_Y: f32 = 1.0;
 pub const CROUCH_SPEED_CONST: f32 = 0.3;
 pub const WALKING_SPEED_CONST: f32 = 0.5;
 
-pub const CROUCH_LEVEL_CONST: f32 = 0.3;
+pub const CROUCH_LEVEL_CONST: f32 = 0.3 * CAMERA_Y;
 
 pub const COLLISION_GAP: f32 = 0.1;
 
@@ -28,7 +27,7 @@ pub const CROSSHAIR_LINE_LENGTH: f32 = 8.0;
 pub const CROSSHAIR_THICKNESS: f32 = 3.0;
 pub const CROSSHAIR_COLOR: Color = DARKGREEN;
 
-pub const BULLET_RADIUS: f32 = 0.05;
+pub const BULLET_RADIUS: f32 = 0.01;
 pub const BULLET_COLOR: Color = YELLOW;
 pub const BULLET_STEP: f32 = 3.0;
 pub static BULLET_INTERVAL: Duration = Duration::from_millis(100);

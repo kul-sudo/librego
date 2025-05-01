@@ -17,7 +17,7 @@ use parry3d::{
 use player::Player;
 use std::{collections::HashMap, time::Instant};
 
-const PLAYER_SIZE: f32 = 0.0;
+const PLAYER_SIZE: f32 = 0.1;
 
 fn window_conf() -> Conf {
     Conf {
@@ -40,47 +40,39 @@ async fn main() {
 
     let mut rng = StdRng::from_os_rng();
 
-    let compounds = [(
+    let compounds = [
         Cube {
             pos: vec3(5.0, 1.0, 0.0),
-            size: vec3(2.0, 5.0, 2.0),
+            size: vec3(2.0, 0.1, 2.0),
         },
         Cube {
-            pos: vec3(7.0, 1.0, 2.0),
-            size: vec3(2.0, 5.0, 2.0),
+            pos: vec3(6.0, 1.5, 0.0),
+            size: vec3(2.0, 0.1, 2.0),
         },
-    )];
-    let mut objects = Vec::from([
-        // Object::Cube(Cube {
-        //     pos: vec3(5.0, 0.0, 0.0),
-        //     size: vec3(2.0, 5.0, 2.0),
-        // }),
-        // Object::Cube(Cube {
-        //     pos: vec3(7.0, 0.0, 2.0),
-        //     size: vec3(2.0, 5.0, 2.0),
-        // }),
-    ]);
+        Cube {
+            pos: vec3(7.0, 2.5, 0.0),
+            size: vec3(1.0, 0.1, 2.0),
+        },
+        Cube {
+            pos: vec3(8.0, 3.0, 0.0),
+            size: vec3(5.0, 0.1, 2.0),
+        },
+    ];
 
-    for (lhs, rhs) in compounds {
-        objects.push(Object::Compound(Compound::new(vec![
-            (
-                Isometry::translation(lhs.pos.x, lhs.pos.y, lhs.pos.z),
-                SharedShape::new(Cuboid::new(Vector::new(
-                    lhs.size.x / 2.0,
-                    lhs.size.y / 2.0,
-                    lhs.size.z / 2.0,
-                ))),
-            ),
-            (
-                Isometry::translation(rhs.pos.x, rhs.pos.y, rhs.pos.z),
-                SharedShape::new(Cuboid::new(Vector::new(
-                    rhs.size.x / 2.0,
-                    rhs.size.y / 2.0,
-                    rhs.size.z / 2.0,
-                ))),
-            ),
-        ])));
-    }
+    let mut compound = Compound::new(
+        compounds
+            .map(|compound| {
+                (
+                    Isometry::translation(compound.pos.x, compound.pos.y, compound.pos.z),
+                    SharedShape::new(Cuboid::new(Vector::new(
+                        compound.size.x / 2.0,
+                        compound.size.y / 2.0,
+                        compound.size.z / 2.0,
+                    ))),
+                )
+            })
+            .to_vec(),
+    );
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -127,26 +119,57 @@ async fn main() {
             player.walking = !player.walking;
         }
 
-        if is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched {
-            player.jump = Some(-JUMP_VELOCITY);
+        let just_jumped =
+            is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched;
+        if just_jumped {
+            player.jump = Some((-JUMP_VELOCITY, player.position.y));
             if player.last_move_timestamp.is_none() {
                 player.last_move_timestamp = Some(Instant::now());
             }
         }
 
+        let player_cuboid = Cuboid::new(Vector::new(
+            PLAYER_SIZE / 2.0,
+            PLAYER_SIZE / 2.0,
+            PLAYER_SIZE / 2.0,
+        ));
+
+        let y_intersection = !just_jumped
+            && query::intersection_test(
+                &Isometry::identity(),
+                &compound,
+                &Isometry::translation(player.position.x, player.position.y, player.position.z),
+                &player_cuboid,
+            )
+            .unwrap();
+
         match &mut player.jump {
-            Some(jump) => {
-                player.position.y -= *jump;
-                *jump += GRAVITY;
-                if player.position.y <= CAMERA_Y {
-                    player.position.y = CAMERA_Y;
+            Some((jump, y_before_jump)) => {
+                if y_intersection {
                     player.jump = None;
+                } else {
+                    player.position.y -= *jump;
+                    *jump += GRAVITY;
+                    if player.position.y <= *y_before_jump {
+                        player.position.y = *y_before_jump;
+                        player.jump = None;
+                    }
                 }
             }
             None => {
-                player.crouched = is_key_down(KeyCode::C);
+                let crouched = is_key_down(KeyCode::C);
 
-                player.position.y = CAMERA_Y - player.crouched as usize as f32 * CROUCH_LEVEL_CONST;
+                player.position.y += CROUCH_LEVEL_CONST
+                    * if crouched {
+                        if !player.crouched { -1.0 } else { 0.0 }
+                    } else if player.crouched {
+                        1.0
+                    } else {
+                        0.0
+                    };
+
+                player.crouched = crouched;
+
                 player.front.y = 0.0;
                 player.front = player.front.normalize();
             }
@@ -198,59 +221,35 @@ async fn main() {
 
         let current_pos = player.position;
 
-        let mut no_intersection_detected = true;
-        for object in &objects {
-            match object {
-                Object::Compound(compound) => {
-                    let player_cuboid = Cuboid::new(Vector::new(
-                        PLAYER_SIZE / 2.0,
-                        PLAYER_SIZE / 2.0,
-                        PLAYER_SIZE / 2.0,
-                    ));
+        let x_intersection = query::intersection_test(
+            &Isometry::identity(),
+            &compound,
+            &Isometry::translation(position.x, current_pos.y, current_pos.z),
+            &player_cuboid,
+        )
+        .unwrap();
+        let z_intersection = query::intersection_test(
+            &Isometry::identity(),
+            &compound,
+            &Isometry::translation(current_pos.x, current_pos.y, position.z),
+            &player_cuboid,
+        )
+        .unwrap();
 
-                    let x_intersection = query::intersection_test(
-                        &Isometry::identity(),
-                        compound,
-                        &Isometry::translation(position.x, current_pos.y, current_pos.z),
-                        &player_cuboid,
-                    )
-                    .unwrap();
-                    let y_intersection = query::intersection_test(
-                        &Isometry::identity(),
-                        compound,
-                        &Isometry::translation(current_pos.x, position.y, current_pos.z),
-                        &player_cuboid,
-                    )
-                    .unwrap();
-                    let z_intersection = query::intersection_test(
-                        &Isometry::identity(),
-                        compound,
-                        &Isometry::translation(current_pos.x, current_pos.y, position.z),
-                        &player_cuboid,
-                    )
-                    .unwrap();
-
-                    if !x_intersection && !y_intersection && !z_intersection {
-                        continue;
-                    }
-
-                    no_intersection_detected = false;
-
-                    if !x_intersection {
-                        player.position.x = position.x;
-                    };
-                    if !y_intersection {
-                        player.position.y = position.y;
-                    };
-                    if !z_intersection {
-                        player.position.z = position.z;
-                    };
-                }
-            }
-        }
-
-        if no_intersection_detected {
-            player.position = position;
+        if y_intersection {
+            player.position.x = position.x;
+            player.position.z = position.z;
+        } else {
+            player.position.x = if !x_intersection {
+                position.x
+            } else {
+                player.position.x
+            };
+            player.position.z = if !z_intersection {
+                position.z
+            } else {
+                player.position.z
+            };
         }
 
         let mouse_position: Vec2 = mouse_position().into();
@@ -303,17 +302,17 @@ async fn main() {
             player.bullets.insert(
                 now,
                 Bullet {
-                    position: player.position,
+                    position: player.position - player.front * 2.0,
                     front: vec3(
-                        player.front.x / FOV
+                        player.front.x
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.y / FOV
+                        player.front.y
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.z / FOV
+                        player.front.z
                             + inaccurate as usize as f32
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
@@ -333,76 +332,60 @@ async fn main() {
             ..Default::default()
         });
 
-        for object in &objects {
-            match object {
-                Object::Compound(compound) => {
-                    for (isometry, shape) in compound.shapes() {
-                        let pos = isometry.translation.vector;
-                        let size = shape.as_cuboid().unwrap().half_extents;
-                        draw_cube(
-                            Vec3::from_slice(pos.as_slice()),
-                            Vec3::from_slice(size.as_slice()) * 2.0,
-                            None,
-                            BLACK,
-                        );
-                        draw_cube_wires(
-                            Vec3::from_slice(pos.as_slice()),
-                            Vec3::from_slice(size.as_slice()) * 2.0,
-                            WHITE,
-                        );
-                    }
-                }
-            }
+        for (isometry, shape) in compound.shapes() {
+            let pos = isometry.translation.vector;
+            let size = shape.as_cuboid().unwrap().half_extents;
+            draw_cube(
+                Vec3::from_slice(pos.as_slice()),
+                Vec3::from_slice(size.as_slice()) * 2.0,
+                None,
+                BLACK,
+            );
+            draw_cube_wires(
+                Vec3::from_slice(pos.as_slice()),
+                Vec3::from_slice(size.as_slice()) * 2.0,
+                WHITE,
+            );
         }
 
         let mut removed_bullets = Vec::new();
         for (started, bullet) in &mut player.bullets {
-            bullet.position += BULLET_STEP * bullet.front;
-
-            // if !(-HALF..HALF).contains(&bullet.position.x)
-            //     || !(-HALF..HALF).contains(&bullet.position.z)
-            // {
-            //     removed_bullets.push(*started);
-            //     continue;
-            // }
-
-            for object in &objects {
-                match object {
-                    Object::Compound(compound) => {
-                        if compound.shapes().iter().any(|(isometry, shape)| {
-                            let ball = Ball::new(BULLET_RADIUS);
-
-                            let cuboid = shape.as_cuboid().unwrap();
-
-                            query::intersection_test(
-                                &Isometry::translation(
-                                    bullet.position.x,
-                                    bullet.position.y,
-                                    bullet.position.z,
-                                ),
-                                &ball,
-                                isometry,
-                                &Cuboid::new(
-                                    Vector::new(
-                                        cuboid.half_extents.x,
-                                        cuboid.half_extents.y,
-                                        cuboid.half_extents.z,
-                                    ),
-                                ),
-                            )
-                            .unwrap()
-                        }) {
-                            removed_bullets.push(*started);
-                        };
-                    }
-                }
+            if !(-HALF..HALF).contains(&bullet.position.x)
+                || !(-HALF..HALF).contains(&bullet.position.z)
+            {
+                removed_bullets.push(*started);
+                continue;
             }
+
+            // for object in &objects {
+            //     match object {
+            //         Object::Compound(compound) => {
+            //             if query::intersection_test(
+            //                 &Isometry::identity(),
+            //                 compound,
+            //                 &Isometry::translation(
+            //                     bullet.position.x,
+            //                     bullet.position.y,
+            //                     bullet.position.z,
+            //                 ),
+            //                 &Ball::new(BULLET_RADIUS),
+            //             )
+            //             .unwrap()
+            //             {
+            //                 removed_bullets.push(*started);
+            //                 break;
+            //             }
+            //         }
+            //     }
+            // }
         }
 
         for timestamp in &removed_bullets {
             player.bullets.remove(timestamp);
         }
+
         for (started, bullet) in &mut player.bullets {
+            bullet.position += BULLET_STEP * bullet.front;
             draw_sphere(bullet.position, BULLET_RADIUS, None, BULLET_COLOR);
         }
 
