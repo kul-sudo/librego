@@ -6,7 +6,7 @@ use std::{collections::HashMap, time::Instant};
 pub struct Player {
     pub crouched: bool,
     pub walking: bool,
-    pub jump: Option<(f32, f32)>,
+    pub jump: Option<f32>,
     pub yaw: f32,
     pub pitch: f32,
     pub front: Vec3,

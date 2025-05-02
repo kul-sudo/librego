@@ -1,4 +1,5 @@
 use macroquad::prelude::*;
+use parry3d::math::Vector;
 use std::{
     f32::consts::{FRAC_PI_2, PI},
     time::Duration,
@@ -15,10 +16,11 @@ pub const LOOK_SPEED: f32 = 0.05;
 pub const JUMP_VELOCITY: f32 = 0.06;
 pub const GRAVITY: f32 = 0.0035;
 
-pub const CAMERA_Y: f32 = 1.0;
 pub const CROUCH_SPEED_CONST: f32 = 0.3;
 pub const WALKING_SPEED_CONST: f32 = 0.5;
 
+pub const CAMERA_Y: f32 = 1.0;
+pub const PLAYER_SIZE: Vector<f32> = Vector::new(0.1 / 2.0, CAMERA_Y / 2.0, 0.1 / 2.0);
 pub const CROUCH_LEVEL_CONST: f32 = 0.3 * CAMERA_Y;
 
 pub const COLLISION_GAP: f32 = 0.1;

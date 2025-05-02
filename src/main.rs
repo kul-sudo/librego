@@ -17,8 +17,6 @@ use parry3d::{
 use player::Player;
 use std::{collections::HashMap, time::Instant};
 
-const PLAYER_SIZE: f32 = 0.1;
-
 fn window_conf() -> Conf {
     Conf {
         window_title: "librego".to_owned(),
@@ -41,38 +39,32 @@ async fn main() {
     let mut rng = StdRng::from_os_rng();
 
     let compounds = [
-        Cube {
-            pos: vec3(5.0, 1.0, 0.0),
-            size: vec3(2.0, 0.1, 2.0),
-        },
-        Cube {
-            pos: vec3(6.0, 1.5, 0.0),
-            size: vec3(2.0, 0.1, 2.0),
-        },
-        Cube {
-            pos: vec3(7.0, 2.5, 0.0),
-            size: vec3(1.0, 0.1, 2.0),
-        },
-        Cube {
-            pos: vec3(8.0, 3.0, 0.0),
-            size: vec3(5.0, 0.1, 2.0),
-        },
+        (vec3(10.0, 0.4, 0.0),
+        Cuboid::new(Vector::new(5.0, 3.0, 5.0))),
+        (vec3(10.0, 0.0, 11.0),
+        Cuboid::new(Vector::new(5.0, 0.1, 5.0))),
     ];
 
     let mut compound = Compound::new(
         compounds
-            .map(|compound| {
+            .map(|(position, shape)| {
                 (
-                    Isometry::translation(compound.pos.x, compound.pos.y, compound.pos.z),
-                    SharedShape::new(Cuboid::new(Vector::new(
-                        compound.size.x / 2.0,
-                        compound.size.y / 2.0,
-                        compound.size.z / 2.0,
-                    ))),
+                    Isometry::translation(position.x, position.y, position.z),
+                    SharedShape::new(shape),
                 )
             })
             .to_vec(),
     );
+
+    let ground_cube = Cube {
+        pos: vec3(0.0, 0.0, 0.0),
+        size: vec3(50.0, 0.0, 50.0),
+    };
+    let ground = Cuboid::new(Vector::new(
+        ground_cube.size.x / 2.0,
+        ground_cube.size.y / 2.0,
+        ground_cube.size.z / 2.0,
+    ));
 
     let world_up = vec3(0.0, 1.0, 0.0);
 
@@ -90,7 +82,7 @@ async fn main() {
     .normalize();
     player.right = player.front.cross(world_up).normalize();
     player.up = player.right.cross(player.front).normalize();
-    player.position = vec3(0.0, CAMERA_Y, 0.0);
+    player.position = vec3(0.0, PLAYER_SIZE.y, 0.0);
     player.bullets = HashMap::new();
     player.last_bullet_timestamp = None;
     player.last_move_timestamp = None;
@@ -122,53 +114,109 @@ async fn main() {
         let just_jumped =
             is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched;
         if just_jumped {
-            player.jump = Some((-JUMP_VELOCITY, player.position.y));
+            player.jump = Some(-JUMP_VELOCITY);
             if player.last_move_timestamp.is_none() {
                 player.last_move_timestamp = Some(Instant::now());
             }
         }
 
-        let player_cuboid = Cuboid::new(Vector::new(
-            PLAYER_SIZE / 2.0,
-            PLAYER_SIZE / 2.0,
-            PLAYER_SIZE / 2.0,
-        ));
+        let player_cuboid = Cuboid::new(PLAYER_SIZE);
 
-        let y_intersection = !just_jumped
-            && query::intersection_test(
-                &Isometry::identity(),
-                &compound,
-                &Isometry::translation(player.position.x, player.position.y, player.position.z),
-                &player_cuboid,
-            )
-            .unwrap();
+        let contact = query::contact(
+            &Isometry::identity(),
+            &compound,
+            &Isometry::translation(player.position.x, player.position.y, player.position.z),
+            &player_cuboid,
+            0.0,
+        )
+        .unwrap();
+        let mut y_intersection =
+            !just_jumped && contact.is_some_and(|contact| contact.point1.y >= contact.point2.y);
+
+        if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
+            player.jump = Some(
+                0.0,
+                // PLAYER_SIZE.y - player.crouched as usize as f32 * CROUCH_LEVEL_CONST,
+            );
+            if player.last_move_timestamp.is_none() {
+                player.last_move_timestamp = Some(Instant::now());
+            }
+        }
 
         match &mut player.jump {
-            Some((jump, y_before_jump)) => {
-                if y_intersection {
+            Some(jump) => {
+                if y_intersection
+                    || !just_jumped
+                        && query::intersection_test(
+                            &Isometry::identity(),
+                            &ground,
+                            &Isometry::translation(
+                                player.position.x,
+                                player.position.y,
+                                player.position.z,
+                            ),
+                            &player_cuboid,
+                        )
+                        .unwrap()
+                {
                     player.jump = None;
                 } else {
+                    if let Some(contact) = contact {
+                        if contact.point1.y <= contact.point2.y {
+                            *jump = JUMP_VELOCITY;
+                            player.position.y = contact.point1.y - PLAYER_SIZE.y;
+                            y_intersection = true;
+                        }
+                    }
                     player.position.y -= *jump;
                     *jump += GRAVITY;
-                    if player.position.y <= *y_before_jump {
-                        player.position.y = *y_before_jump;
-                        player.jump = None;
-                    }
                 }
             }
             None => {
                 let crouched = is_key_down(KeyCode::C);
 
-                player.position.y += CROUCH_LEVEL_CONST
-                    * if crouched {
-                        if !player.crouched { -1.0 } else { 0.0 }
-                    } else if player.crouched {
-                        1.0
-                    } else {
-                        0.0
-                    };
+                // player.position.y += CROUCH_LEVEL_CONST
+                //     * if crouched {
+                //         if !player.crouched { -1.0 } else { 0.0 }
+                //     } else if player.crouched {
+                //         1.0
+                //     } else {
+                //         0.0
+                //     };
+                //
+                // player.crouched = crouched;
+                //
+                let crouched = is_key_down(KeyCode::C);
+                if crouched {
+                    if !player.crouched {
+                        player.position.y -= CROUCH_LEVEL_CONST;
+                        player.crouched = true;
+                    }
+                } else if player.crouched {
+                    let expected_position = player
+                        .position
+                        .with_y(player.position.y + CROUCH_LEVEL_CONST);
 
-                player.crouched = crouched;
+                    let contact = query::contact(
+                        &Isometry::identity(),
+                        &compound,
+                        &Isometry::translation(
+                            expected_position.x,
+                            expected_position.y,
+                            expected_position.z,
+                        ),
+                        &player_cuboid,
+                        0.0,
+                    )
+                    .unwrap();
+
+                    if contact.is_none()
+                        || contact.is_some_and(|contact| contact.point1.y > contact.point2.y)
+                    {
+                        player.position = expected_position;
+                        player.crouched = false;
+                    };
+                }
 
                 player.front.y = 0.0;
                 player.front = player.front.normalize();
@@ -221,20 +269,24 @@ async fn main() {
 
         let current_pos = player.position;
 
-        let x_intersection = query::intersection_test(
+        let x_intersection = query::contact(
             &Isometry::identity(),
             &compound,
             &Isometry::translation(position.x, current_pos.y, current_pos.z),
             &player_cuboid,
+            0.05,
         )
-        .unwrap();
-        let z_intersection = query::intersection_test(
+        .unwrap()
+        .is_some();
+        let z_intersection = query::contact(
             &Isometry::identity(),
             &compound,
             &Isometry::translation(current_pos.x, current_pos.y, position.z),
             &player_cuboid,
+            0.05,
         )
-        .unwrap();
+        .unwrap()
+        .is_some();
 
         if y_intersection {
             player.position.x = position.x;
@@ -356,28 +408,6 @@ async fn main() {
                 removed_bullets.push(*started);
                 continue;
             }
-
-            // for object in &objects {
-            //     match object {
-            //         Object::Compound(compound) => {
-            //             if query::intersection_test(
-            //                 &Isometry::identity(),
-            //                 compound,
-            //                 &Isometry::translation(
-            //                     bullet.position.x,
-            //                     bullet.position.y,
-            //                     bullet.position.z,
-            //                 ),
-            //                 &Ball::new(BULLET_RADIUS),
-            //             )
-            //             .unwrap()
-            //             {
-            //                 removed_bullets.push(*started);
-            //                 break;
-            //             }
-            //         }
-            //     }
-            // }
         }
 
         for timestamp in &removed_bullets {
