@@ -39,10 +39,10 @@ async fn main() {
     let mut rng = StdRng::from_os_rng();
 
     let compounds = [
-        (vec3(10.0, 0.4, 0.0),
-        Cuboid::new(Vector::new(5.0, 3.0, 5.0))),
-        (vec3(10.0, 0.0, 11.0),
-        Cuboid::new(Vector::new(5.0, 0.1, 5.0))),
+        (vec3(-5.0, 0.4, 0.0),
+        Cuboid::new(Vector::new(1.0, 1.0, 1.0))),
+        (vec3(5.0, 0.0, 1.0),
+        Cuboid::new(Vector::new(1.0, 1.0, 1.0))),
     ];
 
     let mut compound = Compound::new(
