@@ -3,10 +3,17 @@ use macroquad::prelude::*;
 use std::{collections::HashMap, time::Instant};
 
 #[derive(Default)]
+pub enum JumpType {
+    #[default]
+    Full,
+    Fall,
+}
+
+#[derive(Default)]
 pub struct Player {
     pub crouched: bool,
     pub walking: bool,
-    pub jump: Option<f32>,
+    pub jump: Option<(f32, JumpType)>,
     pub yaw: f32,
     pub pitch: f32,
     pub front: Vec3,
