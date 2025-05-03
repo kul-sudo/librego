@@ -123,8 +123,6 @@ async fn main() {
         let y_intersection =
             !just_jumped && contact.is_some_and(|contact| contact.point1.y >= contact.point2.y);
 
-        // dbg!(player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none());
-
         if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
             player.jump = Some(0.0);
             if player.last_move_timestamp.is_none() {
@@ -250,6 +248,7 @@ async fn main() {
 
         let current_pos = player.position;
 
+
         let x_intersection = query::contact(
             &Isometry::identity(),
             &compound,
@@ -259,7 +258,7 @@ async fn main() {
         )
         .unwrap()
         .is_some();
-        let z_intersection = query::contact(
+        let z_intersection = !x_intersection && query::contact(
             &Isometry::identity(),
             &compound,
             &Isometry::translation(current_pos.x, current_pos.y, position.z),
