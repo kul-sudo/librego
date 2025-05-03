@@ -7,14 +7,13 @@ use ::rand::{Rng, SeedableRng, rngs::StdRng};
 use bullet::Bullet;
 use consts::*;
 use macroquad::prelude::*;
-use object::{Cube, Object};
 use parry3d_f64::{
     bounding_volume::BoundingVolume,
     math::{Isometry, Vector},
     query,
-    shape::{Ball, Compound, Cuboid, SharedShape},
+    shape::{Compound, Cuboid, SharedShape},
 };
-use player::{JumpType, Player};
+use player::Player;
 use std::{collections::HashMap, time::Instant};
 
 fn window_conf() -> Conf {
@@ -39,11 +38,14 @@ async fn main() {
     let mut rng = StdRng::from_os_rng();
 
     let compounds = [
-        (dvec3(5.0, 0.1, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0))),
+        (
+            dvec3(5.0, 0.1, 1.0),
+            Cuboid::new(Vector::new(1.0, 0.1, 1.0)),
+        ),
         // (vec3(5.0, 1.8, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0)))
     ];
 
-    let mut compound = Compound::new(
+    let compound = Compound::new(
         compounds
             .map(|(position, shape)| {
                 (
@@ -102,7 +104,7 @@ async fn main() {
         let just_jumped =
             is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched;
         if just_jumped {
-            player.jump = Some((-JUMP_VELOCITY, JumpType::Full));
+            player.jump = Some(-JUMP_VELOCITY);
             if player.last_move_timestamp.is_none() {
                 player.last_move_timestamp = Some(Instant::now());
             }
@@ -118,24 +120,22 @@ async fn main() {
             0.0,
         )
         .unwrap();
-        let mut y_intersection =
+        let y_intersection =
             !just_jumped && contact.is_some_and(|contact| contact.point1.y >= contact.point2.y);
 
         // dbg!(player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none());
 
         if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
-            player.jump = Some((
-                0.0,
-                JumpType::Fall, // PLAYER_SIZE.y - player.crouched as usize as f32 * CROUCH_LEVEL_CONST,
-            ));
+            player.jump = Some(0.0);
             if player.last_move_timestamp.is_none() {
                 player.last_move_timestamp = Some(Instant::now());
             }
         }
 
         match &mut player.jump {
-            Some((jump, a)) => {
+            Some(jump) => {
                 if y_intersection {
+                    // let shift = format!("{:.2}", contact.unwrap().point1.y).parse::<f32>();
                     player.position.y = contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
                     player.jump = None;
                 } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && contact.is_none() {
@@ -337,15 +337,15 @@ async fn main() {
                 Bullet {
                     position: player.position - player.front * 2.0,
                     front: dvec3(
-                        player.front.x as f64
+                        player.front.x
                             + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.y as f64
+                        player.front.y
                             + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.z as f64
+                        player.front.z
                             + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
@@ -369,14 +369,14 @@ async fn main() {
             let pos = isometry.translation.vector;
             let size = shape.as_cuboid().unwrap().half_extents;
             draw_cube(
-                vec3(pos[0] as f32, pos[1] as f32, pos[2] as f32),
-                vec3(size[0] as f32, size[1] as f32, size[2] as f32) * 2.0,
+                DVec3::from_slice(pos.as_slice()).as_vec3(),
+                DVec3::from_slice(size.as_slice()).as_vec3() * 2.0,
                 None,
                 BLACK,
             );
             draw_cube_wires(
-                vec3(pos[0] as f32, pos[1] as f32, pos[2] as f32),
-                vec3(size[0] as f32, size[1] as f32, size[2] as f32) * 2.0,
+                DVec3::from_slice(pos.as_slice()).as_vec3(),
+                DVec3::from_slice(size.as_slice()).as_vec3() * 2.0,
                 WHITE,
             );
         }

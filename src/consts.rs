@@ -1,13 +1,12 @@
 use macroquad::prelude::*;
 use parry3d_f64::math::Vector;
 use std::{
-    f32::consts::{FRAC_PI_2 as AA, PI},
-    f64::consts::{FRAC_PI_2},
+    f64::consts::{FRAC_PI_2, PI},
     time::Duration,
 };
 
 pub const DEFAULT_SCREEN_SIZE: Vec2 = vec2(1920.0, 1080.0);
-pub const FOV: f32 = AA;
+pub const FOV: f32 = std::f32::consts::FRAC_PI_2;
 
 pub const PITCH_BOUND: f64 = FRAC_PI_2 * 0.999;
 
@@ -32,7 +31,7 @@ pub const BULLET_RADIUS: f32 = 0.01;
 pub const BULLET_COLOR: Color = YELLOW;
 pub const BULLET_STEP: f64 = 3.0;
 pub static BULLET_INTERVAL: Duration = Duration::from_millis(100);
-pub static BULLET_SPREAD: f64 = 3.14 / 10.0;
+pub static BULLET_SPREAD: f64 = PI / 10.0;
 pub static BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(10);
 pub const BULLETS_BEFORE_RELOAD: u8 = 30;
 pub const RELOAD_DURATION: Duration = Duration::from_secs(2);

@@ -13,7 +13,7 @@ pub enum JumpType {
 pub struct Player {
     pub crouched: bool,
     pub walking: bool,
-    pub jump: Option<(f64, JumpType)>,
+    pub jump: Option<f64>,
     pub yaw: f64,
     pub pitch: f64,
     pub front: DVec3,
