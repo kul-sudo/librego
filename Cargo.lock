@@ -220,7 +220,7 @@ name = "librego"
 version = "0.1.0"
 dependencies = [
  "macroquad",
- "parry3d",
+ "parry3d-f64",
  "rand",
 ]
 
@@ -391,10 +391,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "parry3d"
-version = "0.20.0"
+name = "parry3d-f64"
+version = "0.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "69a8e71e0a9e6d648dce948bdd95568c7f5ccf2ce2d19908ef5a68c9bf550972"
+checksum = "3a53265cf073ca08bdca5433f80f8da790fdd0c01a65902705c96429dc1282e7"
 dependencies = [
  "approx",
  "arrayvec",

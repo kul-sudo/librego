@@ -8,7 +8,7 @@ use bullet::Bullet;
 use consts::*;
 use macroquad::prelude::*;
 use object::{Cube, Object};
-use parry3d::{
+use parry3d_f64::{
     bounding_volume::BoundingVolume,
     math::{Isometry, Vector},
     query,
@@ -38,7 +38,10 @@ async fn main() {
 
     let mut rng = StdRng::from_os_rng();
 
-    let compounds = [(vec3(5.0, 0.1, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0)))];
+    let compounds = [
+        (dvec3(5.0, 0.1, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0))),
+        // (vec3(5.0, 1.8, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0)))
+    ];
 
     let mut compound = Compound::new(
         compounds
@@ -51,7 +54,7 @@ async fn main() {
             .to_vec(),
     );
 
-    let world_up = vec3(0.0, 1.0, 0.0);
+    let world_up = dvec3(0.0, 1.0, 0.0);
 
     let mut player = Player::default();
     player.crouched = false;
@@ -59,7 +62,7 @@ async fn main() {
     player.jump = None;
     player.yaw = 0.0;
     player.pitch = 0.0;
-    player.front = vec3(
+    player.front = dvec3(
         player.yaw.cos() * player.pitch.cos(),
         player.pitch.sin(),
         player.yaw.sin() * player.pitch.cos(),
@@ -67,12 +70,12 @@ async fn main() {
     .normalize();
     player.right = player.front.cross(world_up).normalize();
     player.up = player.right.cross(player.front).normalize();
-    player.position = vec3(0.0, PLAYER_SIZE.y, 0.0);
+    player.position = dvec3(0.0, PLAYER_SIZE.y, 0.0);
     player.bullets = HashMap::new();
     player.last_bullet_timestamp = None;
     player.last_move_timestamp = None;
 
-    let mut last_mouse_position: Vec2 = mouse_position().into();
+    let mut last_mouse_position: DVec2 = Vec2::from(mouse_position()).as_dvec2();
 
     let mut grabbed = true;
     set_cursor_grab(grabbed);
@@ -83,7 +86,7 @@ async fn main() {
     let screen_size = vec2(screen_width(), screen_height());
 
     loop {
-        let delta = get_frame_time();
+        let delta = get_frame_time() as f64;
         let mut moved = false;
 
         if is_key_pressed(KeyCode::Tab) {
@@ -133,9 +136,9 @@ async fn main() {
         match &mut player.jump {
             Some((jump, a)) => {
                 if y_intersection {
-                    // player.position.y = contact.unwrap().point2.y + PLAYER_SIZE.y;
+                    player.position.y = contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
                     player.jump = None;
-                } else if !just_jumped && player.position.y <= PLAYER_SIZE.y {
+                } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && contact.is_none() {
                     player.position.y = PLAYER_SIZE.y;
                     player.jump = None;
                 } else {
@@ -210,7 +213,7 @@ async fn main() {
                 1.0
             });
 
-        let mut pos_delta = Vec3::ZERO;
+        let mut pos_delta = DVec3::ZERO;
         if is_key_down(KeyCode::W) {
             pos_delta += player.front;
             moved = true;
@@ -282,7 +285,7 @@ async fn main() {
             };
         }
 
-        let mouse_position: Vec2 = mouse_position().into();
+        let mouse_position: DVec2 = Vec2::from(mouse_position()).as_dvec2();
         let mouse_delta = mouse_position - last_mouse_position;
 
         last_mouse_position = mouse_position;
@@ -291,7 +294,7 @@ async fn main() {
             player.yaw += mouse_delta.x * delta * LOOK_SPEED;
             player.pitch += mouse_delta.y * delta * -LOOK_SPEED;
             player.pitch = player.pitch.clamp(-PITCH_BOUND, PITCH_BOUND);
-            player.front = vec3(
+            player.front = dvec3(
                 player.yaw.cos() * player.pitch.cos(),
                 player.pitch.sin(),
                 player.yaw.sin() * player.pitch.cos(),
@@ -323,7 +326,7 @@ async fn main() {
 
             let spread_level = match player.last_move_timestamp {
                 Some(timestamp) => {
-                    timestamp.elapsed().as_nanos() as f32 / BULLET_SPREAD_PERIOD.as_nanos() as f32
+                    timestamp.elapsed().as_nanos() as f64 / BULLET_SPREAD_PERIOD.as_nanos() as f64
                 }
                 None => 0.0,
             }
@@ -333,17 +336,17 @@ async fn main() {
                 now,
                 Bullet {
                     position: player.position - player.front * 2.0,
-                    front: vec3(
-                        player.front.x
-                            + inaccurate as usize as f32
+                    front: dvec3(
+                        player.front.x as f64
+                            + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.y
-                            + inaccurate as usize as f32
+                        player.front.y as f64
+                            + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
-                        player.front.z
-                            + inaccurate as usize as f32
+                        player.front.z as f64
+                            + inaccurate as usize as f64
                                 * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
                                 * spread_level,
                     ),
@@ -355,9 +358,9 @@ async fn main() {
         clear_background(BLACK);
 
         set_camera(&Camera3D {
-            position: player.position,
-            up: player.up,
-            target: player.position + player.front,
+            position: player.position.as_vec3(),
+            up: player.up.as_vec3(),
+            target: player.position.as_vec3() + player.front.as_vec3(),
             fovy: FOV,
             ..Default::default()
         });
@@ -366,14 +369,14 @@ async fn main() {
             let pos = isometry.translation.vector;
             let size = shape.as_cuboid().unwrap().half_extents;
             draw_cube(
-                Vec3::from_slice(pos.as_slice()),
-                Vec3::from_slice(size.as_slice()) * 2.0,
+                vec3(pos[0] as f32, pos[1] as f32, pos[2] as f32),
+                vec3(size[0] as f32, size[1] as f32, size[2] as f32) * 2.0,
                 None,
                 BLACK,
             );
             draw_cube_wires(
-                Vec3::from_slice(pos.as_slice()),
-                Vec3::from_slice(size.as_slice()) * 2.0,
+                vec3(pos[0] as f32, pos[1] as f32, pos[2] as f32),
+                vec3(size[0] as f32, size[1] as f32, size[2] as f32) * 2.0,
                 WHITE,
             );
         }
@@ -394,7 +397,7 @@ async fn main() {
 
         for (started, bullet) in &mut player.bullets {
             bullet.position += BULLET_STEP * bullet.front;
-            draw_sphere(bullet.position, BULLET_RADIUS, None, BULLET_COLOR);
+            draw_sphere(bullet.position.as_vec3(), BULLET_RADIUS, None, BULLET_COLOR);
         }
 
         draw_cube(

@@ -1,5 +1,5 @@
 use macroquad::prelude::*;
-use parry3d::shape::Compound;
+use parry3d_f64::shape::Compound;
 
 #[derive(Clone)]
 pub struct Cube {
