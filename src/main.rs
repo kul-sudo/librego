@@ -6,7 +6,10 @@ mod player;
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
 use bullet::Bullet;
 use consts::*;
-use macroquad::prelude::*;
+use macroquad::{
+    audio::{load_sound, play_sound_once},
+    prelude::*,
+};
 use parry3d_f64::{
     bounding_volume::BoundingVolume,
     math::{Isometry, Vector},
@@ -42,7 +45,10 @@ async fn main() {
             dvec3(5.0, 0.1, 1.0),
             Cuboid::new(Vector::new(1.0, 0.1, 1.0)),
         ),
-        // (vec3(5.0, 1.8, 1.0), Cuboid::new(Vector::new(1.0, 0.1, 1.0)))
+        (
+            dvec3(5.0, 1.8, 1.0),
+            Cuboid::new(Vector::new(1.0, 0.1, 1.0)),
+        ),
     ];
 
     let compound = Compound::new(
@@ -87,6 +93,9 @@ async fn main() {
 
     let screen_size = vec2(screen_width(), screen_height());
 
+    set_pc_assets_folder("assets");
+    let sound = load_sound("bullet.ogg").await.unwrap();
+
     loop {
         let delta = get_frame_time() as f64;
         let mut moved = false;
@@ -120,8 +129,8 @@ async fn main() {
             0.0,
         )
         .unwrap();
-        let y_intersection =
-            !just_jumped && contact.is_some_and(|contact| contact.point1.y >= contact.point2.y);
+        let mut y_intersection =
+            !just_jumped && contact.is_some_and(|contact| contact.point1.y > contact.point2.y);
 
         if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
             player.jump = Some(0.0);
@@ -133,20 +142,19 @@ async fn main() {
         match &mut player.jump {
             Some(jump) => {
                 if y_intersection {
-                    // let shift = format!("{:.2}", contact.unwrap().point1.y).parse::<f32>();
                     player.position.y = contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
                     player.jump = None;
                 } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && contact.is_none() {
                     player.position.y = PLAYER_SIZE.y;
                     player.jump = None;
                 } else {
-                    // if let Some(contact) = contact {
-                    //     if contact.point1.y <= contact.point2.y {
-                    //         *jump = JUMP_VELOCITY;
-                    //         player.position.y = contact.point1.y - PLAYER_SIZE.y;
-                    //         y_intersection = true;
-                    //     }
-                    // }
+                    if let Some(contact) = contact {
+                        if contact.point1.y <= contact.point2.y {
+                            *jump = 0.0;
+                            player.position.y = (contact.point1.y - PLAYER_SIZE.y) * 0.9999;
+                            y_intersection = false;
+                        }
+                    }
                     player.position.y -= *jump;
                     *jump += GRAVITY;
                 }
@@ -248,7 +256,6 @@ async fn main() {
 
         let current_pos = player.position;
 
-
         let x_intersection = query::contact(
             &Isometry::identity(),
             &compound,
@@ -258,15 +265,16 @@ async fn main() {
         )
         .unwrap()
         .is_some();
-        let z_intersection = !x_intersection && query::contact(
-            &Isometry::identity(),
-            &compound,
-            &Isometry::translation(current_pos.x, current_pos.y, position.z),
-            &player_cuboid,
-            0.05,
-        )
-        .unwrap()
-        .is_some();
+        let z_intersection = !x_intersection
+            && query::contact(
+                &Isometry::identity(),
+                &compound,
+                &Isometry::translation(current_pos.x, current_pos.y, position.z),
+                &player_cuboid,
+                0.05,
+            )
+            .unwrap()
+            .is_some();
 
         if y_intersection {
             player.position.x = position.x;
@@ -352,12 +360,17 @@ async fn main() {
                     born: Instant::now(),
                 },
             );
+
+            play_sound_once(&sound);
         }
 
         clear_background(BLACK);
 
         set_camera(&Camera3D {
-            position: player.position.as_vec3(),
+            position: player
+                .position
+                .with_x(player.position.x + PLAYER_SIZE.x)
+                .as_vec3(),
             up: player.up.as_vec3(),
             target: player.position.as_vec3() + player.front.as_vec3(),
             fovy: FOV,
@@ -405,6 +418,13 @@ async fn main() {
             None,
             GRAY,
         );
+
+        // draw_cube(
+        //     player.position.as_vec3(),
+        //     (DVec3::from_slice(PLAYER_SIZE.as_slice()) * 2.0).as_vec3(),
+        //     None,
+        //     GRAY,
+        // );
 
         set_default_camera();
 
