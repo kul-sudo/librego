@@ -1,8 +1,8 @@
 use macroquad::prelude::*;
+use parry3d_f64::query::{NonlinearRigidMotion, ShapeCastHit};
 use std::time::Instant;
 
 pub struct Bullet {
-    pub position: DVec3,
-    pub front: DVec3,
+    pub motion: NonlinearRigidMotion,
     pub born: Instant,
 }
