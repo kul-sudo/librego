@@ -3,7 +3,12 @@ mod consts;
 mod player;
 
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
-use axum::{Router, extract::Query, routing::get, serve};
+use axum::{
+    Router,
+    extract::Query,
+    routing::{get, post},
+    serve,
+};
 use bullet::Bullet;
 use consts::*;
 use macroquad::{
@@ -49,6 +54,15 @@ struct Request {
     // action: Option<Action>
 }
 
+#[derive(Deserialize)]
+struct Move {
+    id: usize,
+    x: f64,
+    y: f64,
+    z: f64,
+    // action: Option<Action>
+}
+
 async fn list_things(request: Query<Request>) {
     let request: Request = request.0;
 }
@@ -61,62 +75,90 @@ async fn main() {
         next_frame().await;
     }
 
-    let host = vars()
-        .find(|(key, _)| key == "HOST")
-        .unwrap()
-        .1
-        .parse::<bool>()
-        .unwrap();
+    let address;
+    let host = vars().find(|(key, _)| key == "HOST");
 
     let players = Arc::new(RwLock::new(HashMap::new()));
 
-    if host {
-        let players_clone = players.clone();
-
-        std::thread::spawn(move || {
-            let app = Router::new().route(
-                "/",
-                get(|query: Query<Request>| async move {
-                    let request: Request = query.0;
-
-                    let mut rng = StdRng::from_os_rng();
-
-                    players_clone.write().unwrap().insert(
-                        request.id,
-                        Player {
-                            position: dvec3(
-                                rng.random_range(-20.0..20.0),
-                                0.0,
-                                rng.random_range(-20.0..20.0),
-                            ),
-                            ..Default::default()
-                        },
-                    );
-                }),
-            );
-
-            let rt = tokio::runtime::Runtime::new().unwrap();
-            rt.block_on(async {
-                // build our application with a single route
-
-                // run our app with hyper, listening globally on port 3000
-                let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-                serve(listener, app).await.unwrap();
-                // HttpServer::new(|| App::new())
-                //     .bind(("127.0.0.1", 8080))
-                //     .unwrap()
-                //     .run()
-                //     .await
-                //     .unwrap()
-            })
-        });
-
-        println!("Host.")
-    } else {
-        println!("Not a host.")
-    }
-
     let mut rng = StdRng::from_os_rng();
+
+    match host {
+        Some((_, server)) => {
+            let id = rng.random_range(0..10000);
+            address = Some((server.clone(), id));
+            std::thread::spawn(move || {
+                let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
+
+                let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let mut params = HashMap::new();
+                    params.insert("id", id);
+                    let res = client
+                        .post(server.to_owned())
+                        .query(&params)
+                        .send()
+                        .await
+                        .unwrap();
+                    dbg!(res);
+                });
+            });
+        }
+        None => {
+            address = None;
+
+            let players_clone = players.clone();
+
+            std::thread::spawn(move || {
+                let app = Router::new()
+                    .route(
+                        "/",
+                        post({
+                            let players_clone = players_clone.clone();
+
+                            move |query: Query<Request>| async move {
+                                let request: Request = query.0;
+
+                                let mut rng = StdRng::from_os_rng();
+
+                                players_clone.write().unwrap().insert(
+                                    request.id,
+                                    Player {
+                                        position: dvec3(
+                                            rng.random_range(-20.0..20.0),
+                                            0.0,
+                                            rng.random_range(-20.0..20.0),
+                                        ),
+                                        ..Default::default()
+                                    },
+                                );
+                            }
+                        }),
+                    )
+                    .route(
+                        "/move",
+                        post({
+                            let players_clone = players_clone.clone();
+
+                            move |query: Query<Move>| async move {
+                                // players_clone
+                                //     .write()
+                                //     .unwrap()
+                                //     .get_mut(&query.id)
+                                //     .unwrap()
+                                //     .position = dvec3(query.x, query.y, query.z);
+                            }
+                        }),
+                    );
+
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+                    serve(listener, app).await.unwrap();
+                })
+            });
+        }
+    }
 
     let compounds = [
         (
@@ -550,6 +592,32 @@ async fn main() {
             BULLETS_FONT_SIZE as f32,
             WHITE,
         );
+
+        // if let Some((ref server, id)) = address {
+        //     let serv = server.clone();
+        //     std::thread::spawn(move || {
+        //         let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
+        //         let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+        //
+        //         let rt = tokio::runtime::Runtime::new().unwrap();
+        //         rt.block_on(async {
+        //             let mut params = HashMap::new();
+        //             params.insert("id", id.to_string());
+        //             params.insert("x", player.position.x.to_string());
+        //             params.insert("y", player.position.y.to_string());
+        //             params.insert("z", player.position.z.to_string());
+        //
+        //             let res = client
+        //                 .post(serv.to_owned() + "/move")
+        //                 .query(&params)
+        //                 .send()
+        //                 .await
+        //                 .unwrap();
+        //
+        //             dbg!(res);
+        //         })
+        //     });
+        // }
 
         next_frame().await
     }
