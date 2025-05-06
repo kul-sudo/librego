@@ -100,9 +100,10 @@ async fn main() {
                         .send()
                         .await
                         .unwrap();
-                    dbg!(res);
                 });
-            });
+            })
+            .join()
+            .unwrap();
         }
         None => {
             address = None;
@@ -141,12 +142,12 @@ async fn main() {
                             let players_clone = players_clone.clone();
 
                             move |query: Query<Move>| async move {
-                                // players_clone
-                                //     .write()
-                                //     .unwrap()
-                                //     .get_mut(&query.id)
-                                //     .unwrap()
-                                //     .position = dvec3(query.x, query.y, query.z);
+                                players_clone
+                                    .write()
+                                    .unwrap()
+                                    .get_mut(&query.id)
+                                    .unwrap()
+                                    .position = dvec3(query.x, query.y, query.z);
                             }
                         }),
                     );
@@ -593,30 +594,30 @@ async fn main() {
             WHITE,
         );
 
-        // if let Some((ref server, id)) = address {
-        //     let serv = server.clone();
-        //     std::thread::spawn(move || {
-        //         let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-        //         let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
-        //
-        //         let rt = tokio::runtime::Runtime::new().unwrap();
-        //         rt.block_on(async {
-        //             let mut params = HashMap::new();
-        //             params.insert("id", id.to_string());
-        //             params.insert("x", player.position.x.to_string());
-        //             params.insert("y", player.position.y.to_string());
-        //             params.insert("z", player.position.z.to_string());
-        //
-        //             let res = client
-        //                 .post(serv.to_owned() + "/move")
-        //                 .query(&params)
-        //                 .send()
-        //                 .await
-        //                 .unwrap();
-        //
-        //             dbg!(res);
-        //         })
-        //     });
+        // if moved || player.jump.is_some() {
+            if let Some((ref server, id)) = address {
+                let serv = server.clone();
+                std::thread::spawn(move || {
+                    let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
+                    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        let mut params = HashMap::new();
+                        params.insert("id", id.to_string());
+                        params.insert("x", player.position.x.to_string());
+                        params.insert("y", player.position.y.to_string());
+                        params.insert("z", player.position.z.to_string());
+
+                        let res = client
+                            .post(serv.to_owned() + "/move")
+                            .query(&params)
+                            .send()
+                            .await
+                            .unwrap();
+                    })
+                });
+            }
         // }
 
         next_frame().await
