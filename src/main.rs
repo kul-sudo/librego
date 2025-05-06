@@ -1,6 +1,5 @@
 mod bullet;
 mod consts;
-mod object;
 mod player;
 
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
@@ -13,11 +12,11 @@ use macroquad::{
 use parry3d_f64::{
     bounding_volume::BoundingVolume,
     math::{Isometry, Point, Vector},
-    query,
+    query::{Ray, RayCast, contact},
     shape::{Ball, Compound, Cuboid, SharedShape},
 };
 use player::Player;
-use std::{collections::HashMap, time::Instant};
+use std::{collections::HashMap, env::vars, time::Instant};
 
 fn window_conf() -> Conf {
     Conf {
@@ -32,10 +31,44 @@ fn window_conf() -> Conf {
 }
 
 #[macroquad::main(window_conf)]
+#[tokio::main]
 async fn main() {
     for _ in 0..8 {
         set_fullscreen(true);
         next_frame().await;
+    }
+
+    let host = vars()
+        .find(|(key, _)| key == "HOST")
+        .unwrap()
+        .1
+        .parse::<bool>()
+        .unwrap();
+
+    if host {
+        std::thread::spawn(|| {
+            let app =
+                axum::Router::new().route("/", axum::routing::get(|| async { "Hello, World!" }));
+
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            rt.block_on(async {
+                // build our application with a single route
+
+                // run our app with hyper, listening globally on port 3000
+                let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
+                axum::serve(listener, app).await.unwrap();
+                // HttpServer::new(|| App::new())
+                //     .bind(("127.0.0.1", 8080))
+                //     .unwrap()
+                //     .run()
+                //     .await
+                //     .unwrap()
+            })
+        });
+
+        println!("Host.")
+    } else {
+        println!("Not a host.")
     }
 
     let mut rng = StdRng::from_os_rng();
@@ -51,19 +84,19 @@ async fn main() {
         ),
         (
             dvec3(HALF, 0.0, 0.0),
-            Cuboid::new(Vector::new(1.0, 20.0, HALF)),
+            Cuboid::new(Vector::new(0.0, 20.0, HALF)),
         ),
         (
             dvec3(0.0, 0.0, HALF),
-            Cuboid::new(Vector::new(HALF, 20.0, 1.0)),
+            Cuboid::new(Vector::new(HALF, 20.0, 0.0)),
         ),
         (
             dvec3(0.0, 0.0, -HALF),
-            Cuboid::new(Vector::new(HALF, 20.0, 1.0)),
+            Cuboid::new(Vector::new(HALF, 20.0, 0.0)),
         ),
         (
             dvec3(-HALF, 0.0, 0.0),
-            Cuboid::new(Vector::new(1.0, 20.0, HALF)),
+            Cuboid::new(Vector::new(0.0, 20.0, HALF)),
         ),
     ];
 
@@ -137,6 +170,11 @@ async fn main() {
 
         let player_cuboid = Cuboid::new(PLAYER_SIZE);
 
+        if player.jump.is_none() {
+            player.front.y = 0.0;
+            player.front = player.front.normalize();
+        }
+
         let move_speed = MOVE_SPEED
             * (if player.crouched {
                 CROUCH_SPEED_CONST
@@ -183,7 +221,7 @@ async fn main() {
 
         let current_pos = player.position;
 
-        let contact = query::contact(
+        let maybe_contact = contact(
             &Isometry::identity(),
             &compound,
             &Isometry::translation(player.position.x, current_pos.y, player.position.z),
@@ -191,8 +229,8 @@ async fn main() {
             0.0,
         )
         .unwrap();
-        let mut y_intersection =
-            !just_jumped && contact.is_some_and(|contact| player.position.y > contact.point2.y);
+        let mut y_intersection = !just_jumped
+            && maybe_contact.is_some_and(|contact| player.position.y > contact.point2.y);
 
         if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
             player.jump = Some(0.0);
@@ -201,33 +239,28 @@ async fn main() {
             }
         }
 
-        match &mut player.jump {
-            Some(jump) => {
-                if y_intersection {
-                    player.position.y = contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
-                    player.jump = None;
-                } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && contact.is_none() {
-                    player.position.y = PLAYER_SIZE.y;
-                    player.jump = None;
-                } else {
-                    if let Some(contact) = contact {
-                        if player.position.y <= contact.point2.y {
-                            *jump = 0.0;
-                            player.position.y = (contact.point1.y - PLAYER_SIZE.y) * 0.99999;
-                            y_intersection = false;
-                        }
+        if let Some(jump) = &mut player.jump {
+            if y_intersection {
+                player.position.y = maybe_contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
+                player.jump = None;
+            } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && maybe_contact.is_none()
+            {
+                player.position.y = PLAYER_SIZE.y;
+                player.jump = None;
+            } else {
+                if let Some(contact) = maybe_contact {
+                    if player.position.y <= contact.point2.y {
+                        *jump = 0.0;
+                        player.position.y = (contact.point1.y - PLAYER_SIZE.y) * 0.99999;
+                        y_intersection = false;
                     }
-                    player.position.y -= *jump;
-                    *jump += GRAVITY;
                 }
-            }
-            None => {
-                player.front.y = 0.0;
-                player.front = player.front.normalize();
+                player.position.y -= *jump;
+                *jump += GRAVITY;
             }
         }
 
-        let x_intersection = query::contact(
+        let x_intersection = contact(
             &Isometry::identity(),
             &compound,
             &Isometry::translation(position.x, current_pos.y, current_pos.z),
@@ -237,7 +270,7 @@ async fn main() {
         .unwrap()
         .is_some();
         let z_intersection = !x_intersection
-            && query::contact(
+            && contact(
                 &Isometry::identity(),
                 &compound,
                 &Isometry::translation(current_pos.x, current_pos.y, position.z),
@@ -306,32 +339,35 @@ async fn main() {
             }
             .min(1.0);
 
-            let mut motion = query::NonlinearRigidMotion::new(
-                Isometry::translation(player.position.x, player.position.y, player.position.z),
+            let mut ray = Ray::new(
                 Point::new(player.position.x, player.position.y, player.position.z),
-                Vector::new(player.front.x, player.front.y, player.front.z) * BULLET_STEP,
-                Vector::new(0.0, 0.0, 0.0),
+                Vector::new(
+                    player.front.x
+                        + inaccurate as usize as f64
+                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                            * spread_level,
+                    player.front.y
+                        + inaccurate as usize as f64
+                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                            * spread_level,
+                    player.front.z
+                        + inaccurate as usize as f64
+                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
+                            * spread_level,
+                ),
             );
 
-            let cast = query::cast_shapes_nonlinear(
-                &motion,
-                &Ball::new(BULLET_RADIUS as f64),
-                &query::NonlinearRigidMotion::constant_position(Isometry::identity()),
-                &compound,
-                f64::NEG_INFINITY,
-                f64::INFINITY,
-                true,
-            );
-
-            if let Some(cast) = cast.unwrap() {
+            if let Some(time) = compound.cast_ray(&Isometry::identity(), &ray, f64::INFINITY, true)
+            {
+                ray.origin = ray.point_at(time);
                 player.bullets.insert(
                     now,
                     Bullet {
-                        motion,
+                        ray,
                         born: Instant::now(),
                     },
                 );
-            }
+            };
 
             play_sound_once(&sound);
         }
@@ -356,39 +392,39 @@ async fn main() {
             ..Default::default()
         });
 
-        player.bullets.retain(|_, bullet| {
-            let maybe_cast = query::cast_shapes_nonlinear(
-                &bullet.motion,
-                &Ball::new(BULLET_RADIUS as f64),
-                &query::NonlinearRigidMotion::constant_position(Isometry::identity()),
-                &compound,
-                0.0,
-                f64::INFINITY,
-                true,
-            )
-            .unwrap();
-
-            !maybe_cast.is_some_and(|cast| {
-                matches!(
-                    cast.status,
-                    query::ShapeCastStatus::PenetratingOrWithinTargetDist
-                )
-            })
-        });
+        // player.bullets.retain(|_, bullet| {
+        //     let maybe_cast = query::cast_shapes_nonlinear(
+        //         &bullet.motion,
+        //         &Ball::new(BULLET_RADIUS as f64),
+        //         &query::NonlinearRigidMotion::constant_position(Isometry::identity()),
+        //         &compound,
+        //         0.0,
+        //         f64::INFINITY,
+        //         true,
+        //     )
+        //     .unwrap();
+        //
+        //     !maybe_cast.is_some_and(|cast| {
+        //         matches!(
+        //             cast.status,
+        //             query::ShapeCastStatus::PenetratingOrWithinTargetDist
+        //         )
+        //     })
+        // });
 
         for (started, bullet) in &mut player.bullets {
             draw_sphere(
                 vec3(
-                    bullet.motion.start.translation.x as f32,
-                    bullet.motion.start.translation.y as f32,
-                    bullet.motion.start.translation.z as f32,
+                    bullet.ray.origin.x as f32,
+                    bullet.ray.origin.y as f32,
+                    bullet.ray.origin.z as f32,
                 ),
                 BULLET_RADIUS,
                 None,
                 BULLET_COLOR,
             );
-
-            bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
+            //
+            // bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
         }
 
         // draw_cube(
