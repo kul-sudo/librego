@@ -3,6 +3,7 @@ mod consts;
 mod player;
 
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
+use axum::{Router, extract::Query, routing::get, serve};
 use bullet::Bullet;
 use consts::*;
 use macroquad::{
@@ -16,7 +17,13 @@ use parry3d_f64::{
     shape::{Ball, Compound, Cuboid, SharedShape},
 };
 use player::Player;
-use std::{collections::HashMap, env::vars, time::Instant};
+use serde::Deserialize;
+use std::{
+    collections::HashMap,
+    env::vars,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 
 fn window_conf() -> Conf {
     Conf {
@@ -28,6 +35,22 @@ fn window_conf() -> Conf {
         },
         ..Default::default()
     }
+}
+
+// #[derive(Deserialize)]
+// enum Action {
+//     Move(DVec2),
+//     Leave
+// }
+
+#[derive(Deserialize)]
+struct Request {
+    id: usize,
+    // action: Option<Action>
+}
+
+async fn list_things(request: Query<Request>) {
+    let request: Request = request.0;
 }
 
 #[macroquad::main(window_conf)]
@@ -45,18 +68,40 @@ async fn main() {
         .parse::<bool>()
         .unwrap();
 
+    let players = Arc::new(RwLock::new(HashMap::new()));
+
     if host {
-        std::thread::spawn(|| {
-            let app =
-                axum::Router::new().route("/", axum::routing::get(|| async { "Hello, World!" }));
+        let players_clone = players.clone();
+
+        std::thread::spawn(move || {
+            let app = Router::new().route(
+                "/",
+                get(|query: Query<Request>| async move {
+                    let request: Request = query.0;
+
+                    let mut rng = StdRng::from_os_rng();
+
+                    players_clone.write().unwrap().insert(
+                        request.id,
+                        Player {
+                            position: dvec3(
+                                rng.random_range(-20.0..20.0),
+                                0.0,
+                                rng.random_range(-20.0..20.0),
+                            ),
+                            ..Default::default()
+                        },
+                    );
+                }),
+            );
 
             let rt = tokio::runtime::Runtime::new().unwrap();
             rt.block_on(async {
                 // build our application with a single route
 
                 // run our app with hyper, listening globally on port 3000
-                let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
-                axum::serve(listener, app).await.unwrap();
+                let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
+                serve(listener, app).await.unwrap();
                 // HttpServer::new(|| App::new())
                 //     .bind(("127.0.0.1", 8080))
                 //     .unwrap()
@@ -427,12 +472,15 @@ async fn main() {
             // bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
         }
 
-        // draw_cube(
-        //     player.position.as_vec3(),
-        //     DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
-        //     None,
-        //     RED,
-        // );
+        let players_clone = players.read().unwrap();
+        for other_player in players_clone.values() {
+            draw_cube(
+                other_player.position.as_vec3(),
+                DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
+                None,
+                RED,
+            );
+        }
 
         for (isometry, shape) in compound.shapes() {
             let pos = isometry.translation.vector;

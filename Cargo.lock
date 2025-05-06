@@ -498,6 +498,7 @@ dependencies = [
  "macroquad",
  "parry3d-f64",
  "rand",
+ "serde",
  "tokio",
 ]
 
