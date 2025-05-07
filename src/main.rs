@@ -1,25 +1,17 @@
-mod bullet;
 mod consts;
 mod player;
 
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
-use axum::{
-    Router,
-    extract::Query,
-    routing::{get, post},
-    serve,
-};
-use bullet::Bullet;
+use axum::{Router, extract::Query, routing::post, serve};
 use consts::*;
 use macroquad::{
     audio::{load_sound, play_sound_once},
     prelude::*,
 };
 use parry3d_f64::{
-    bounding_volume::BoundingVolume,
     math::{Isometry, Point, Vector},
     query::{Ray, RayCast, contact},
-    shape::{Ball, Compound, Cuboid, SharedShape},
+    shape::{Compound, Cuboid, SharedShape},
 };
 use player::Player;
 use serde::Deserialize;
@@ -60,11 +52,6 @@ struct Move {
     x: f64,
     y: f64,
     z: f64,
-    // action: Option<Action>
-}
-
-async fn list_things(request: Query<Request>) {
-    let request: Request = request.0;
 }
 
 #[macroquad::main(window_conf)]
@@ -88,18 +75,23 @@ async fn main() {
             address = Some((server.clone(), id));
             std::thread::spawn(move || {
                 let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-
                 let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+
                 let rt = tokio::runtime::Runtime::new().unwrap();
                 rt.block_on(async {
                     let mut params = HashMap::new();
                     params.insert("id", id);
-                    let res = client
-                        .post(server.to_owned())
-                        .query(&params)
-                        .send()
-                        .await
-                        .unwrap();
+                    loop {
+                        let res = client
+                            .post(server.to_owned())
+                            .query(&params)
+                            .send()
+                            .await
+                            .unwrap();
+                        if res.status().is_success() {
+                            break;
+                        }
+                    }
                 });
             })
             .join()
@@ -142,12 +134,10 @@ async fn main() {
                             let players_clone = players_clone.clone();
 
                             move |query: Query<Move>| async move {
-                                players_clone
-                                    .write()
-                                    .unwrap()
-                                    .get_mut(&query.id)
-                                    .unwrap()
-                                    .position = dvec3(query.x, query.y, query.z);
+                                let mut players_write = players_clone.write().unwrap();
+                                let value = players_write.get_mut(&query.id).unwrap();
+                                value.position =
+                                    value.position.lerp(dvec3(query.x, query.y, query.z), 0.5);
                             }
                         }),
                     );
@@ -216,7 +206,6 @@ async fn main() {
     player.right = player.front.cross(world_up).normalize();
     player.up = player.right.cross(player.front).normalize();
     player.position = dvec3(0.0, PLAYER_SIZE.y, 0.0);
-    player.bullets = HashMap::new();
     player.last_bullet_timestamp = None;
     player.last_move_timestamp = None;
 
@@ -427,7 +416,7 @@ async fn main() {
             }
             .min(1.0);
 
-            let mut ray = Ray::new(
+            let ray = Ray::new(
                 Point::new(player.position.x, player.position.y, player.position.z),
                 Vector::new(
                     player.front.x
@@ -445,16 +434,18 @@ async fn main() {
                 ),
             );
 
-            if let Some(time) = compound.cast_ray(&Isometry::identity(), &ray, f64::INFINITY, true)
+            if compound
+                .cast_ray(&Isometry::identity(), &ray, f64::INFINITY, true)
+                .is_some()
             {
-                ray.origin = ray.point_at(time);
-                player.bullets.insert(
-                    now,
-                    Bullet {
-                        ray,
-                        born: Instant::now(),
-                    },
-                );
+                // ray.origin = ray.point_at(time);
+                // player.bullets.insert(
+                //     now,
+                //     Bullet {
+                //         ray,
+                //         born: Instant::now(),
+                //     },
+                // );
             };
 
             play_sound_once(&sound);
@@ -500,29 +491,31 @@ async fn main() {
         //     })
         // });
 
-        for (started, bullet) in &mut player.bullets {
-            draw_sphere(
-                vec3(
-                    bullet.ray.origin.x as f32,
-                    bullet.ray.origin.y as f32,
-                    bullet.ray.origin.z as f32,
-                ),
-                BULLET_RADIUS,
-                None,
-                BULLET_COLOR,
-            );
-            //
-            // bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
-        }
+        // for (started, bullet) in &mut player.bullets {
+        //     draw_sphere(
+        //         vec3(
+        //             bullet.ray.origin.x as f32,
+        //             bullet.ray.origin.y as f32,
+        //             bullet.ray.origin.z as f32,
+        //         ),
+        //         BULLET_RADIUS,
+        //         None,
+        //         BULLET_COLOR,
+        //     );
+        //     //
+        //     // bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
+        // }
 
-        let players_clone = players.read().unwrap();
-        for other_player in players_clone.values() {
-            draw_cube(
-                other_player.position.as_vec3(),
-                DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
-                None,
-                RED,
-            );
+        {
+            let players_clone = players.read().unwrap();
+            for other_player in players_clone.values() {
+                draw_cube(
+                    other_player.position.as_vec3(),
+                    DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
+                    None,
+                    RED,
+                );
+            }
         }
 
         for (isometry, shape) in compound.shapes() {
@@ -594,31 +587,31 @@ async fn main() {
             WHITE,
         );
 
-        // if moved || player.jump.is_some() {
-            if let Some((ref server, id)) = address {
-                let serv = server.clone();
-                std::thread::spawn(move || {
-                    let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-                    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+        if moved || player.jump.is_some() {
+        if let Some((ref server, id)) = address {
+            let serv = server.clone();
+            std::thread::spawn(move || {
+                let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
+                let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
 
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        let mut params = HashMap::new();
-                        params.insert("id", id.to_string());
-                        params.insert("x", player.position.x.to_string());
-                        params.insert("y", player.position.y.to_string());
-                        params.insert("z", player.position.z.to_string());
+                let rt = tokio::runtime::Runtime::new().unwrap();
+                rt.block_on(async {
+                    let mut params = HashMap::new();
+                    params.insert("id", id.to_string());
+                    params.insert("x", player.position.x.to_string());
+                    params.insert("y", player.position.y.to_string());
+                    params.insert("z", player.position.z.to_string());
 
-                        let res = client
-                            .post(serv.to_owned() + "/move")
-                            .query(&params)
-                            .send()
-                            .await
-                            .unwrap();
-                    })
-                });
-            }
-        // }
+                    client
+                        .post(serv.to_owned() + "/move")
+                        .query(&params)
+                        .send()
+                        .await
+                        .unwrap();
+                })
+            });
+        }
+        }
 
         next_frame().await
     }

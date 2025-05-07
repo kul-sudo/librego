@@ -27,8 +27,6 @@ pub const CROSSHAIR_LINE_LENGTH: f32 = 8.0;
 pub const CROSSHAIR_THICKNESS: f32 = 3.0;
 pub const CROSSHAIR_COLOR: Color = DARKGREEN;
 
-pub const BULLET_RADIUS: f32 = 0.01;
-pub const BULLET_COLOR: Color = YELLOW;
 pub static BULLET_INTERVAL: Duration = Duration::from_millis(100);
 pub static BULLET_SPREAD: f64 = PI / 10.0;
 pub static BULLET_SPREAD_PERIOD: Duration = Duration::from_secs(10);
