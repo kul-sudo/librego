@@ -19,7 +19,7 @@ use std::{
     collections::HashMap,
     env::vars,
     sync::{Arc, RwLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 fn window_conf() -> Conf {
@@ -82,13 +82,8 @@ async fn main() {
                     let mut params = HashMap::new();
                     params.insert("id", id);
                     loop {
-                        let res = client
-                            .post(server.to_owned())
-                            .query(&params)
-                            .send()
-                            .await
-                            .unwrap();
-                        if res.status().is_success() {
+                        let res = client.post(server.to_owned()).query(&params).send().await;
+                        if res.is_ok_and(|res| res.status().is_success()) {
                             break;
                         }
                     }
@@ -588,29 +583,29 @@ async fn main() {
         );
 
         if moved || player.jump.is_some() {
-        if let Some((ref server, id)) = address {
-            let serv = server.clone();
-            std::thread::spawn(move || {
-                let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-                let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+            if let Some((ref server, id)) = address {
+                let serv = server.clone();
+                std::thread::spawn(move || {
+                    let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
+                    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
 
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let mut params = HashMap::new();
-                    params.insert("id", id.to_string());
-                    params.insert("x", player.position.x.to_string());
-                    params.insert("y", player.position.y.to_string());
-                    params.insert("z", player.position.z.to_string());
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    rt.block_on(async {
+                        let mut params = HashMap::new();
+                        params.insert("id", id.to_string());
+                        params.insert("x", player.position.x.to_string());
+                        params.insert("y", player.position.y.to_string());
+                        params.insert("z", player.position.z.to_string());
 
-                    client
-                        .post(serv.to_owned() + "/move")
-                        .query(&params)
-                        .send()
-                        .await
-                        .unwrap();
-                })
-            });
-        }
+                        let _ = client
+                            .post(serv.to_owned() + "/move")
+                            .timeout(Duration::from_millis(500))
+                            .query(&params)
+                            .send()
+                            .await;
+                    })
+                });
+            }
         }
 
         next_frame().await
