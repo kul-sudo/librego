@@ -12,6 +12,7 @@ pub const PITCH_BOUND: f64 = FRAC_PI_2 * 0.999;
 
 pub const MOVE_SPEED: f64 = 0.05;
 pub const LOOK_SPEED: f64 = 0.05;
+pub const WORLD_UP: DVec3 = DVec3::Y;
 
 pub const JUMP_VELOCITY: f64 = 0.06;
 pub const GRAVITY: f64 = 0.0035;

@@ -2,25 +2,24 @@ mod consts;
 mod player;
 
 use ::rand::{Rng, SeedableRng, rngs::StdRng};
-use axum::{Router, extract::Query, routing::post, serve};
+use axum::{Json, Router, extract::Query, routing::post, serve};
 use consts::*;
-use macroquad::{
-    audio::{load_sound, play_sound_once},
-    prelude::*,
-};
+use macroquad::{audio::load_sound, prelude::*};
 use parry3d_f64::{
-    math::{Isometry, Point, Vector},
-    query::{Ray, RayCast, contact},
+    math::{Isometry, Vector},
     shape::{Compound, Cuboid, SharedShape},
 };
 use player::Player;
-use serde::Deserialize;
+use reqwest::{Client, Proxy};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::vars,
     sync::{Arc, RwLock},
-    time::{Duration, Instant},
+    thread::spawn,
+    time::Duration,
 };
+use tokio::{net::TcpListener, runtime::Runtime};
 
 fn window_conf() -> Conf {
     Conf {
@@ -34,21 +33,24 @@ fn window_conf() -> Conf {
     }
 }
 
-// #[derive(Deserialize)]
-// enum Action {
-//     Move(DVec2),
-//     Leave
-// }
-
-#[derive(Deserialize)]
-struct Request {
-    id: usize,
-    // action: Option<Action>
+#[derive(Serialize, Deserialize)]
+struct Register {
+    users: Vec<(usize, (f64, f64, f64))>,
+    peers: Vec<String>,
 }
 
-#[derive(Deserialize)]
-struct Move {
+#[derive(Serialize, Deserialize)]
+struct MoveQuery {
     id: usize,
+    x: f64,
+    y: f64,
+    z: f64,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RegisterQuery {
+    id: usize,
+    server: String,
     x: f64,
     y: f64,
     z: f64,
@@ -62,89 +64,144 @@ async fn main() {
         next_frame().await;
     }
 
-    let address;
-    let host = vars().find(|(key, _)| key == "HOST");
-
-    let players = Arc::new(RwLock::new(HashMap::new()));
+    let screen_size = vec2(screen_width(), screen_height());
 
     let mut rng = StdRng::from_os_rng();
 
-    match host {
-        Some((_, server)) => {
-            let id = rng.random_range(0..10000);
-            address = Some((server.clone(), id));
-            std::thread::spawn(move || {
-                let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-                let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+    let id = rng.random_range(0..10000);
+    let server = vars()
+        .find(|(key, _)| key == "SERVER")
+        .expect("SERVER must be specified.")
+        .1;
+    let host = vars()
+        .find(|(key, _)| key == "HOST")
+        .expect("HOST must be specified.")
+        .1;
 
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let mut params = HashMap::new();
-                    params.insert("id", id);
-                    loop {
-                        let res = client.post(server.to_owned()).query(&params).send().await;
-                        if res.is_ok_and(|res| res.status().is_success()) {
-                            break;
-                        }
-                    }
-                });
-            })
-            .join()
-            .unwrap();
-        }
-        None => {
-            address = None;
+    let players = Arc::new(RwLock::new(HashMap::new()));
+    let peers = Arc::new(RwLock::new(Vec::new()));
 
-            let players_clone = players.clone();
+    let mut player = Player::new(dvec3(0.0, PLAYER_SIZE.y, 0.0));
 
-            std::thread::spawn(move || {
-                let app = Router::new()
-                    .route(
-                        "/",
-                        post({
-                            let players_clone = players_clone.clone();
+    let players_clone = players.clone();
+    let peers_clone = peers.clone();
+    let server_clone = server.clone();
 
-                            move |query: Query<Request>| async move {
-                                let request: Request = query.0;
+    spawn(move || {
+        let proxy = Proxy::http("http://localhost:4444").unwrap();
+        let client = Client::builder().proxy(proxy).build().unwrap();
+        let players_clone = players_clone.clone();
+        let peers_clone = peers_clone.clone();
+        let server_clone = server_clone.clone();
 
-                                let mut rng = StdRng::from_os_rng();
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let mut params = HashMap::new();
+            params.insert("id", id);
+            let server_clone_clone = server_clone.clone();
 
-                                players_clone.write().unwrap().insert(
-                                    request.id,
-                                    Player {
-                                        position: dvec3(
-                                            rng.random_range(-20.0..20.0),
-                                            0.0,
-                                            rng.random_range(-20.0..20.0),
-                                        ),
-                                        ..Default::default()
-                                    },
-                                );
-                            }
-                        }),
-                    )
-                    .route(
-                        "/move",
-                        post({
-                            let players_clone = players_clone.clone();
-
-                            move |query: Query<Move>| async move {
-                                let mut players_write = players_clone.write().unwrap();
-                                let value = players_write.get_mut(&query.id).unwrap();
-                                value.position =
-                                    value.position.lerp(dvec3(query.x, query.y, query.z), 0.5);
-                            }
-                        }),
-                    );
-
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(async {
-                    let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
-                    serve(listener, app).await.unwrap();
+            let res = client
+                .post(server_clone + "/register")
+                .query(&RegisterQuery {
+                    id,
+                    server: server_clone_clone,
+                    x: player.position.x,
+                    y: player.position.y,
+                    z: player.position.z,
                 })
-            });
-        }
-    }
+                .send()
+                .await
+                .unwrap();
+
+            let register: Register = res.json().await.unwrap();
+
+            let mut players_write = players_clone.write().unwrap();
+            for (id, (x, y, z)) in register.users {
+                players_write.insert(id, Player::new(dvec3(x, y, z)));
+            }
+
+            let mut peers_write = peers_clone.write().unwrap();
+            *peers_write = register.peers;
+        })
+    })
+    .join()
+    .unwrap();
+
+    let players_clone = players.clone();
+    let peers_clone = peers.clone();
+    let server_clone = server.clone();
+
+    spawn(move || {
+        let app = Router::new()
+            .route(
+                "/register",
+                post({
+                    let players_clone = players_clone.clone();
+                    let peers_clone = peers_clone.clone();
+                    let server_clone = server_clone.clone();
+
+                    move |query: Query<RegisterQuery>| async move {
+                        let proxy = Proxy::http("http://localhost:4444").unwrap();
+                        let client = Client::builder().proxy(proxy).build().unwrap();
+
+                        let mut players_write = players_clone.write().unwrap();
+                        players_write
+                            .insert(query.id, Player::new(dvec3(query.x, query.y, query.z)));
+
+                        let mut peers_write = peers_clone.write().unwrap();
+                        for peer in peers_write.iter() {
+                            let server_clone = server_clone.clone();
+                            
+                            let res = client
+                                .post(peer.to_owned() + "/register")
+                                .query(&RegisterQuery {
+                                    id,
+                                    server: server_clone,
+                                    x: query.x,
+                                    y: query.y,
+                                    z: query.z,
+                                })
+                                .send()
+                                .await
+                                .unwrap();
+                        }
+
+                        peers_write.push(query.server.clone());
+
+                        Json(Register {
+                            users: players_write
+                                .iter()
+                                .map(|(id, player)| {
+                                    (
+                                        *id,
+                                        (player.position.x, player.position.y, player.position.z),
+                                    )
+                                })
+                                .collect::<Vec<_>>(),
+                            peers: peers_write.to_vec(),
+                        })
+                    }
+                }),
+            )
+            .route(
+                "/move",
+                post({
+                    let players_clone = players_clone.clone();
+
+                    move |query: Query<MoveQuery>| async move {
+                        let mut players_write = players_clone.write().unwrap();
+                        players_write.get_mut(&query.id).unwrap().position =
+                            dvec3(query.x, query.y, query.z);
+                    }
+                }),
+            );
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async {
+            let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+            serve(listener, app).await.unwrap();
+        })
+    });
 
     let compounds = [
         (
@@ -184,42 +241,15 @@ async fn main() {
             .to_vec(),
     );
 
-    let world_up = dvec3(0.0, 1.0, 0.0);
-
-    let mut player = Player::default();
-    player.crouched = false;
-    player.walking = false;
-    player.jump = None;
-    player.yaw = 0.0;
-    player.pitch = 0.0;
-    player.front = dvec3(
-        player.yaw.cos() * player.pitch.cos(),
-        player.pitch.sin(),
-        player.yaw.sin() * player.pitch.cos(),
-    )
-    .normalize();
-    player.right = player.front.cross(world_up).normalize();
-    player.up = player.right.cross(player.front).normalize();
-    player.position = dvec3(0.0, PLAYER_SIZE.y, 0.0);
-    player.last_bullet_timestamp = None;
-    player.last_move_timestamp = None;
-
-    let mut last_mouse_position: DVec2 = Vec2::from(mouse_position()).as_dvec2();
-
     let mut grabbed = true;
     set_cursor_grab(grabbed);
     show_mouse(false);
 
-    set_fullscreen(true);
-
-    let screen_size = vec2(screen_width(), screen_height());
-
     set_pc_assets_folder("assets");
-    let sound = load_sound("bullet.ogg").await.unwrap();
+    let bullet_sound = load_sound("bullet.ogg").await.unwrap();
 
     loop {
         let delta = get_frame_time() as f64;
-        let mut moved = false;
 
         if is_key_pressed(KeyCode::Tab) {
             grabbed = !grabbed;
@@ -227,279 +257,19 @@ async fn main() {
             show_mouse(!grabbed);
         }
 
-        if is_key_pressed(KeyCode::LeftShift) {
-            player.walking = !player.walking;
-        }
-
-        let just_jumped =
-            is_key_pressed(KeyCode::Space) && player.jump.is_none() && !player.crouched;
-        if just_jumped {
-            player.jump = Some(-JUMP_VELOCITY);
-            if player.last_move_timestamp.is_none() {
-                player.last_move_timestamp = Some(Instant::now());
-            }
-        }
-
-        let player_cuboid = Cuboid::new(PLAYER_SIZE);
-
-        if player.jump.is_none() {
-            player.front.y = 0.0;
-            player.front = player.front.normalize();
-        }
-
-        let move_speed = MOVE_SPEED
-            * (if player.crouched {
-                CROUCH_SPEED_CONST
-            } else if player.walking {
-                WALKING_SPEED_CONST
-            } else {
-                1.0
-            });
-
-        let mut pos_delta = DVec3::ZERO;
-        if is_key_down(KeyCode::W) {
-            pos_delta += player.front;
-            moved = true;
-        }
-        if is_key_down(KeyCode::S) {
-            pos_delta -= player.front;
-            moved = true;
-        }
-        if is_key_down(KeyCode::A) {
-            pos_delta -= player.right;
-            moved = true;
-        }
-        if is_key_down(KeyCode::D) {
-            pos_delta += player.right;
-            moved = true;
-        }
-
-        if is_key_pressed(KeyCode::R) {
-            player.bullets_since_last_reload = 0;
-            player.last_reload_timestamp = Some(Instant::now());
-        }
-
-        if moved && player.last_move_timestamp.is_none() {
-            player.last_move_timestamp = Some(Instant::now());
-        } else if !moved && player.jump.is_none() {
-            player.last_move_timestamp = None;
-        }
-
-        if pos_delta.length() > 0.0 {
-            pos_delta = pos_delta.normalize();
-        }
-
-        let position = player.position + pos_delta * move_speed;
-
-        let current_pos = player.position;
-
-        let maybe_contact = contact(
-            &Isometry::identity(),
-            &compound,
-            &Isometry::translation(player.position.x, current_pos.y, player.position.z),
-            &player_cuboid,
-            0.0,
-        )
-        .unwrap();
-        let mut y_intersection = !just_jumped
-            && maybe_contact.is_some_and(|contact| player.position.y > contact.point2.y);
-
-        if player.position.y > PLAYER_SIZE.y && !y_intersection && player.jump.is_none() {
-            player.jump = Some(0.0);
-            if player.last_move_timestamp.is_none() {
-                player.last_move_timestamp = Some(Instant::now());
-            }
-        }
-
-        if let Some(jump) = &mut player.jump {
-            if y_intersection {
-                player.position.y = maybe_contact.unwrap().point1.y as f64 + PLAYER_SIZE.y;
-                player.jump = None;
-            } else if !just_jumped && player.position.y <= PLAYER_SIZE.y && maybe_contact.is_none()
-            {
-                player.position.y = PLAYER_SIZE.y;
-                player.jump = None;
-            } else {
-                if let Some(contact) = maybe_contact {
-                    if player.position.y <= contact.point2.y {
-                        *jump = 0.0;
-                        player.position.y = (contact.point1.y - PLAYER_SIZE.y) * 0.99999;
-                        y_intersection = false;
-                    }
-                }
-                player.position.y -= *jump;
-                *jump += GRAVITY;
-            }
-        }
-
-        let x_intersection = contact(
-            &Isometry::identity(),
-            &compound,
-            &Isometry::translation(position.x, current_pos.y, current_pos.z),
-            &player_cuboid,
-            0.0,
-        )
-        .unwrap()
-        .is_some();
-        let z_intersection = !x_intersection
-            && contact(
-                &Isometry::identity(),
-                &compound,
-                &Isometry::translation(current_pos.x, current_pos.y, position.z),
-                &player_cuboid,
-                0.0,
-            )
-            .unwrap()
-            .is_some();
-
-        if y_intersection {
-            player.position.x = position.x;
-            player.position.z = position.z;
-        } else {
-            if !x_intersection {
-                player.position.x = position.x
-            }
-            if !z_intersection {
-                player.position.z = position.z
-            };
-        }
-
-        let mouse_position: DVec2 = Vec2::from(mouse_position()).as_dvec2();
-        let mouse_delta = mouse_position - last_mouse_position;
-
-        last_mouse_position = mouse_position;
-
-        if grabbed {
-            player.yaw += mouse_delta.x * delta * LOOK_SPEED;
-            player.pitch += mouse_delta.y * delta * -LOOK_SPEED;
-            player.pitch = player.pitch.clamp(-PITCH_BOUND, PITCH_BOUND);
-            player.front = dvec3(
-                player.yaw.cos() * player.pitch.cos(),
-                player.pitch.sin(),
-                player.yaw.sin() * player.pitch.cos(),
-            )
-            .normalize();
-
-            player.right = player.front.cross(world_up).normalize();
-            player.up = player.right.cross(player.front).normalize();
-        }
-
-        if is_mouse_button_down(MouseButton::Left)
-            && player.bullets_since_last_reload < BULLETS_BEFORE_RELOAD
-            && if let Some(last_reload_timestamp) = player.last_reload_timestamp {
-                last_reload_timestamp.elapsed() > RELOAD_DURATION
-            } else {
-                true
-            }
-            && if let Some(last_bullet_timestamp) = player.last_bullet_timestamp {
-                last_bullet_timestamp.elapsed() > BULLET_INTERVAL
-            } else {
-                true
-            }
-        {
-            player.bullets_since_last_reload += 1;
-
-            let inaccurate = !player.crouched && (player.jump.is_some() || moved);
-            let now = Instant::now();
-            player.last_bullet_timestamp = Some(now);
-
-            let spread_level = match player.last_move_timestamp {
-                Some(timestamp) => {
-                    timestamp.elapsed().as_nanos() as f64 / BULLET_SPREAD_PERIOD.as_nanos() as f64
-                }
-                None => 0.0,
-            }
-            .min(1.0);
-
-            let ray = Ray::new(
-                Point::new(player.position.x, player.position.y, player.position.z),
-                Vector::new(
-                    player.front.x
-                        + inaccurate as usize as f64
-                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
-                            * spread_level,
-                    player.front.y
-                        + inaccurate as usize as f64
-                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
-                            * spread_level,
-                    player.front.z
-                        + inaccurate as usize as f64
-                            * rng.random_range(-BULLET_SPREAD..BULLET_SPREAD)
-                            * spread_level,
-                ),
-            );
-
-            if compound
-                .cast_ray(&Isometry::identity(), &ray, f64::INFINITY, true)
-                .is_some()
-            {
-                // ray.origin = ray.point_at(time);
-                // player.bullets.insert(
-                //     now,
-                //     Bullet {
-                //         ray,
-                //         born: Instant::now(),
-                //     },
-                // );
-            };
-
-            play_sound_once(&sound);
-        }
+        let moved = player.movement(&compound);
+        player.look(delta);
+        player.bullets(&compound, &bullet_sound, moved, &mut rng);
 
         clear_background(BLACK);
-        // set_camera(&Camera3D {
-        //     position: vec3(5.0, 0.5, 5.0),
-        //     up: player.up.as_vec3(),
-        //     target: player.position.as_vec3(),
-        //     fovy: FOV,
-        //     ..Default::default()
-        // });
 
         set_camera(&Camera3D {
-            position: player
-                .position
-                // .with_x(player.position.x + PLAYER_SIZE.x)
-                .as_vec3(),
+            position: player.position.as_vec3(),
             up: player.up.as_vec3(),
             target: player.position.as_vec3() + player.front.as_vec3(),
             fovy: FOV,
             ..Default::default()
         });
-
-        // player.bullets.retain(|_, bullet| {
-        //     let maybe_cast = query::cast_shapes_nonlinear(
-        //         &bullet.motion,
-        //         &Ball::new(BULLET_RADIUS as f64),
-        //         &query::NonlinearRigidMotion::constant_position(Isometry::identity()),
-        //         &compound,
-        //         0.0,
-        //         f64::INFINITY,
-        //         true,
-        //     )
-        //     .unwrap();
-        //
-        //     !maybe_cast.is_some_and(|cast| {
-        //         matches!(
-        //             cast.status,
-        //             query::ShapeCastStatus::PenetratingOrWithinTargetDist
-        //         )
-        //     })
-        // });
-
-        // for (started, bullet) in &mut player.bullets {
-        //     draw_sphere(
-        //         vec3(
-        //             bullet.ray.origin.x as f32,
-        //             bullet.ray.origin.y as f32,
-        //             bullet.ray.origin.z as f32,
-        //         ),
-        //         BULLET_RADIUS,
-        //         None,
-        //         BULLET_COLOR,
-        //     );
-        //     //
-        //     // bullet.motion = bullet.motion.prepend_translation(bullet.motion.linvel);
-        // }
 
         {
             let players_clone = players.read().unwrap();
@@ -535,13 +305,6 @@ async fn main() {
             None,
             GRAY,
         );
-
-        // draw_cube(
-        //     player.position.as_vec3(),
-        //     (DVec3::from_slice(PLAYER_SIZE.as_slice()) * 2.0).as_vec3(),
-        //     None,
-        //     GRAY,
-        // );
 
         set_default_camera();
 
@@ -583,29 +346,32 @@ async fn main() {
         );
 
         if moved || player.jump.is_some() {
-            if let Some((ref server, id)) = address {
-                let serv = server.clone();
-                std::thread::spawn(move || {
-                    let proxy = reqwest::Proxy::http("http://localhost:4444").unwrap();
-                    let client = reqwest::Client::builder().proxy(proxy).build().unwrap();
+            let peers_clone = peers.clone();
+            let server_clone = server.clone();
 
-                    let rt = tokio::runtime::Runtime::new().unwrap();
-                    rt.block_on(async {
-                        let mut params = HashMap::new();
-                        params.insert("id", id.to_string());
-                        params.insert("x", player.position.x.to_string());
-                        params.insert("y", player.position.y.to_string());
-                        params.insert("z", player.position.z.to_string());
+            spawn(move || {
+                let proxy = Proxy::http("http://localhost:4444").unwrap();
+                let client = Client::builder().proxy(proxy).build().unwrap();
 
+                let peers_read = peers_clone.read().unwrap();
+
+                let rt = Runtime::new().unwrap();
+                rt.block_on(async {
+                    for peer in peers_read.iter() {
                         let _ = client
-                            .post(serv.to_owned() + "/move")
+                            .post(peer.to_owned() + "/move")
                             .timeout(Duration::from_millis(500))
-                            .query(&params)
+                            .query(&MoveQuery {
+                                id: id,
+                                x: player.position.x,
+                                y: player.position.y,
+                                z: player.position.z,
+                            })
                             .send()
                             .await;
-                    })
-                });
-            }
+                    }
+                })
+            });
         }
 
         next_frame().await
