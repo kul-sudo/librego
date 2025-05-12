@@ -35,13 +35,12 @@ fn window_conf() -> Conf {
 
 #[derive(Serialize, Deserialize)]
 struct Register {
-    users: Vec<(usize, (f64, f64, f64))>,
-    peers: Vec<String>,
+    peers: Vec<(String, (f64, f64, f64))>,
 }
 
 #[derive(Serialize, Deserialize)]
 struct MoveQuery {
-    id: usize,
+    host: String,
     x: f64,
     y: f64,
     z: f64,
@@ -49,16 +48,20 @@ struct MoveQuery {
 
 #[derive(Serialize, Deserialize)]
 struct RegisterQuery {
-    id: usize,
-    server: String,
+    host: String,
     x: f64,
     y: f64,
     z: f64,
 }
 
-#[macroquad::main(window_conf)]
-#[tokio::main]
-async fn main() {
+async fn start(
+    id: usize,
+    mut player: Player,
+    peers: Arc<RwLock<HashMap<String, Player>>>,
+    port: String,
+    host: String,
+    rng: &mut StdRng,
+) {
     for _ in 0..8 {
         set_fullscreen(true);
         next_frame().await;
@@ -66,139 +69,66 @@ async fn main() {
 
     let screen_size = vec2(screen_width(), screen_height());
 
-    let mut rng = StdRng::from_os_rng();
-
-    let id = rng.random_range(0..10000);
-    let server = vars()
-        .find(|(key, _)| key == "SERVER")
-        .expect("SERVER must be specified.")
-        .1;
-    let host = vars()
-        .find(|(key, _)| key == "HOST")
-        .expect("HOST must be specified.")
-        .1;
-
-    let players = Arc::new(RwLock::new(HashMap::new()));
-    let peers = Arc::new(RwLock::new(Vec::new()));
-
-    let mut player = Player::new(dvec3(0.0, PLAYER_SIZE.y, 0.0));
-
-    let players_clone = players.clone();
     let peers_clone = peers.clone();
-    let server_clone = server.clone();
-
-    spawn(move || {
-        let proxy = Proxy::http("http://localhost:4444").unwrap();
-        let client = Client::builder().proxy(proxy).build().unwrap();
-        let players_clone = players_clone.clone();
-        let peers_clone = peers_clone.clone();
-        let server_clone = server_clone.clone();
-
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let mut params = HashMap::new();
-            params.insert("id", id);
-            let server_clone_clone = server_clone.clone();
-
-            let res = client
-                .post(server_clone + "/register")
-                .query(&RegisterQuery {
-                    id,
-                    server: server_clone_clone,
-                    x: player.position.x,
-                    y: player.position.y,
-                    z: player.position.z,
-                })
-                .send()
-                .await
-                .unwrap();
-
-            let register: Register = res.json().await.unwrap();
-
-            let mut players_write = players_clone.write().unwrap();
-            for (id, (x, y, z)) in register.users {
-                players_write.insert(id, Player::new(dvec3(x, y, z)));
-            }
-
-            let mut peers_write = peers_clone.write().unwrap();
-            *peers_write = register.peers;
-        })
-    })
-    .join()
-    .unwrap();
-
-    let players_clone = players.clone();
-    let peers_clone = peers.clone();
-    let server_clone = server.clone();
+    let host_clone = host.clone();
 
     spawn(move || {
         let app = Router::new()
             .route(
                 "/register",
                 post({
-                    let players_clone = players_clone.clone();
                     let peers_clone = peers_clone.clone();
-                    let server_clone = server_clone.clone();
+                    let host_clone = host_clone.clone();
 
                     move |query: Query<RegisterQuery>| async move {
-                        let proxy = Proxy::http("http://localhost:4444").unwrap();
-                        let client = Client::builder().proxy(proxy).build().unwrap();
-
-                        let mut players_write = players_clone.write().unwrap();
-                        players_write
-                            .insert(query.id, Player::new(dvec3(query.x, query.y, query.z)));
-
                         let mut peers_write = peers_clone.write().unwrap();
-                        for peer in peers_write.iter() {
-                            let server_clone = server_clone.clone();
-                            
-                            let res = client
-                                .post(peer.to_owned() + "/register")
-                                .query(&RegisterQuery {
-                                    id,
-                                    server: server_clone,
-                                    x: query.x,
-                                    y: query.y,
-                                    z: query.z,
-                                })
-                                .send()
-                                .await
-                                .unwrap();
-                        }
+                        let mut new_peers = (*peers_write)
+                            .clone()
+                            .iter()
+                            .map(|(peer_host, peer)| {
+                                (
+                                    peer_host.clone(),
+                                    (peer.position.x, peer.position.y, peer.position.z),
+                                )
+                            })
+                            .collect::<Vec<_>>();
 
-                        peers_write.push(query.server.clone());
+                        new_peers.push((
+                            host_clone,
+                            (player.position.x, player.position.y, player.position.z),
+                        ));
 
-                        Json(Register {
-                            users: players_write
-                                .iter()
-                                .map(|(id, player)| {
-                                    (
-                                        *id,
-                                        (player.position.x, player.position.y, player.position.z),
-                                    )
-                                })
-                                .collect::<Vec<_>>(),
-                            peers: peers_write.to_vec(),
-                        })
+                        peers_write.insert(
+                            query.host.clone(),
+                            Player::new(dvec3(query.x, query.y, query.z)),
+                        );
+
+                        Json(Register { peers: new_peers })
                     }
                 }),
             )
             .route(
                 "/move",
                 post({
-                    let players_clone = players_clone.clone();
+                    let peers_clone = peers_clone.clone();
 
                     move |query: Query<MoveQuery>| async move {
-                        let mut players_write = players_clone.write().unwrap();
-                        players_write.get_mut(&query.id).unwrap().position =
-                            dvec3(query.x, query.y, query.z);
+                        dbg!(&query.host);
+
+                        let mut peers_write = peers_clone.write().unwrap();
+                        if let Some(peer) = peers_write.get_mut(&query.host) {
+                            dbg!(1);
+                            peer.position = dvec3(query.x, query.y, query.z);
+                        }
                     }
                 }),
             );
 
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let listener = TcpListener::bind("0.0.0.0:8080").await.unwrap();
+            let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
+                .await
+                .unwrap();
             serve(listener, app).await.unwrap();
         })
     });
@@ -258,8 +188,10 @@ async fn main() {
         }
 
         let moved = player.movement(&compound);
-        player.look(delta);
-        player.bullets(&compound, &bullet_sound, moved, &mut rng);
+        if grabbed {
+            player.look(delta);
+        }
+        player.bullets(&compound, &bullet_sound, moved, rng);
 
         clear_background(BLACK);
 
@@ -271,9 +203,13 @@ async fn main() {
             ..Default::default()
         });
 
+        let peers_clone = peers.clone();
+
         {
-            let players_clone = players.read().unwrap();
-            for other_player in players_clone.values() {
+            let peers_clone = peers_clone.clone();
+            let peers_read = peers_clone.read().unwrap();
+
+            for other_player in peers_read.values() {
                 draw_cube(
                     other_player.position.as_vec3(),
                     DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
@@ -345,24 +281,29 @@ async fn main() {
             WHITE,
         );
 
-        if moved || player.jump.is_some() {
-            let peers_clone = peers.clone();
-            let server_clone = server.clone();
+        let peers_clone = peers.clone();
+        let host_clone = host.clone();
 
+        if moved || player.jump.is_some() {
             spawn(move || {
+                let peers_clone = peers_clone.clone();
+                let host_clone = host_clone.clone();
+
                 let proxy = Proxy::http("http://localhost:4444").unwrap();
                 let client = Client::builder().proxy(proxy).build().unwrap();
 
-                let peers_read = peers_clone.read().unwrap();
-
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async {
-                    for peer in peers_read.iter() {
+                    let peers_clone = peers_clone.read().unwrap();
+
+                    for peer_host in peers_clone.keys() {
+                        let host_clone = host_clone.clone();
+
                         let _ = client
-                            .post(peer.to_owned() + "/move")
-                            .timeout(Duration::from_millis(500))
+                            .post(peer_host.to_owned() + "/move")
+                            .timeout(Duration::from_millis(200))
                             .query(&MoveQuery {
-                                id: id,
+                                host: host_clone,
                                 x: player.position.x,
                                 y: player.position.y,
                                 z: player.position.z,
@@ -376,4 +317,82 @@ async fn main() {
 
         next_frame().await
     }
+}
+
+#[macroquad::main(window_conf)]
+#[tokio::main]
+async fn main() {
+    let mut rng = StdRng::from_os_rng();
+
+    let id = rng.random_range(0..10000);
+    let server = match vars().find(|(key, _)| key == "SERVER") {
+        Some(server) => Some(server.1),
+        None => None,
+    };
+    let host = vars()
+        .find(|(key, _)| key == "HOST")
+        .expect("HOST must be specified.")
+        .1;
+    let port = vars()
+        .find(|(key, _)| key == "PORT")
+        .expect("PORT must be specified.")
+        .1;
+
+    let peers = Arc::new(RwLock::new(HashMap::new()));
+
+    let mut player = Player::new(dvec3(0.0, PLAYER_SIZE.y, 0.0));
+
+    if let Some(server) = server {
+        let peers_clone = peers.clone();
+        let host_clone = host.clone();
+
+        spawn(move || {
+            let proxy = Proxy::http("http://localhost:4444").unwrap();
+            let client = Client::builder().proxy(proxy).build().unwrap();
+            let peers_clone = peers_clone.clone();
+            let host_clone = host_clone.clone();
+
+            let rt = Runtime::new().unwrap();
+            rt.block_on(async {
+                let mut params = HashMap::new();
+                params.insert("id", id);
+
+                let res = client
+                    .post(server + "/register")
+                    .query(&RegisterQuery {
+                        host: host_clone.clone(),
+                        x: player.position.x,
+                        y: player.position.y,
+                        z: player.position.z,
+                    })
+                    .send()
+                    .await
+                    .unwrap();
+
+                let register: Register = res.json().await.unwrap();
+
+                let mut peers_write = peers_clone.write().unwrap();
+                for (peer_host, (x, y, z)) in register.peers {
+                    peers_write.insert(peer_host, Player::new(dvec3(x, y, z)));
+                }
+
+                for (peer_host, peer) in peers_write.iter() {
+                    let _ = client
+                        .post(peer_host.to_owned() + "/register")
+                        .query(&RegisterQuery {
+                            host: host_clone.clone(),
+                            x: player.position.x,
+                            y: player.position.y,
+                            z: player.position.z,
+                        })
+                        .send()
+                        .await;
+                }
+            })
+        })
+        .join()
+        .unwrap();
+    }
+
+    start(id, player, peers, port, host, &mut rng).await;
 }

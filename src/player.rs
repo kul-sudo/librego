@@ -11,6 +11,7 @@ use parry3d_f64::{
 };
 use std::time::Instant;
 
+#[derive(Clone)]
 pub struct Player {
     pub crouched: bool,
     pub walking: bool,
