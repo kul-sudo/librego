@@ -2,7 +2,12 @@ mod consts;
 mod player;
 
 use ::rand::{SeedableRng, rngs::StdRng};
-use axum::{Json, Router, extract::Query, routing::post, serve};
+use axum::{
+    Json, Router,
+    extract::Query,
+    routing::{get, post},
+    serve,
+};
 use consts::*;
 use macroquad::{audio::load_sound, prelude::*};
 use parry3d_f64::{
@@ -56,7 +61,7 @@ struct RegisterQuery {
 async fn start(
     mut player: Player,
     peers: Arc<RwLock<HashMap<String, Player>>>,
-    port: String,
+    protocol: String,
     host: String,
     rng: &mut StdRng,
 ) {
@@ -121,9 +126,7 @@ async fn start(
 
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
-            let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
-                .await
-                .unwrap();
+            let listener = TcpListener::bind(host_clone).await.unwrap();
             serve(listener, app).await.unwrap();
         })
     });
@@ -277,20 +280,22 @@ async fn start(
 
         let peers_clone = peers.clone();
         let host_clone = host.clone();
+        let protocol_clone = protocol.clone();
 
         if moved || player.jump.is_some() {
             spawn(move || {
-                let proxy = Proxy::http("http://localhost:4444").unwrap();
-                let client = Client::builder().proxy(proxy).build().unwrap();
+                // let proxy = Proxy::http("http://localhost:4444").unwrap();
+                let client = Client::builder().build().unwrap();
                 let peers_clone = peers_clone.read().unwrap();
 
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async {
                     for peer_host in peers_clone.keys() {
                         let host_clone = host_clone.clone();
+                        let protocol_clone = protocol_clone.clone();
 
                         let _ = client
-                            .post(peer_host.to_owned() + "/move")
+                            .post(protocol_clone + peer_host + "/move")
                             // .timeout(Duration::from_millis(10))
                             .query(&MoveQuery {
                                 host: host_clone,
@@ -322,10 +327,11 @@ async fn main() {
         .find(|(key, _)| key == "HOST")
         .expect("HOST must be specified.")
         .1;
-    let port = vars()
-        .find(|(key, _)| key == "PORT")
-        .expect("PORT must be specified.")
-        .1;
+    let protocol = vars()
+        .find(|(key, _)| key == "PROTOCOL")
+        .expect("PROTOCOL must be specified.")
+        .1
+        + "://";
 
     let peers = Arc::new(RwLock::new(HashMap::<String, Player>::new()));
 
@@ -334,15 +340,16 @@ async fn main() {
     if let Some(server) = server {
         let peers_clone = peers.clone();
         let host_clone = host.clone();
+        let protocol_clone = protocol.clone();
 
         spawn(move || {
-            let proxy = Proxy::http("http://localhost:4444").unwrap();
-            let client = Client::builder().proxy(proxy).build().unwrap();
+            // let proxy = Proxy::http("http://localhost:4444").unwrap();
+            let client = Client::builder().build().unwrap();
 
             let rt = Runtime::new().unwrap();
             rt.block_on(async {
                 let res = client
-                    .post(server + "/register")
+                    .post(protocol_clone.clone() + &server + "/register")
                     .query(&RegisterQuery {
                         host: host_clone.clone(),
                         x: player.position.x,
@@ -357,7 +364,7 @@ async fn main() {
 
                 for peer_host in peers_write.keys() {
                     let _ = client
-                        .post(peer_host.to_owned() + "/register")
+                        .post(protocol_clone.clone() + peer_host + "/register")
                         .query(&RegisterQuery {
                             host: host_clone.clone(),
                             x: player.position.x,
@@ -379,5 +386,5 @@ async fn main() {
         .unwrap();
     }
 
-    start(player, peers, port, host, &mut rng).await;
+    start(player, peers, protocol, host, &mut rng).await;
 }
