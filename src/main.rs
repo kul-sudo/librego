@@ -76,56 +76,56 @@ async fn start(
     let host_clone = host.clone();
 
     spawn(move || {
-        let app = Router::new()
-            .route(
-                "/register",
-                post({
-                    let peers_clone = peers_clone.clone();
-                    let host_clone = host_clone.clone();
-
-                    move |query: Query<RegisterQuery>| async move {
-                        let mut peers_write = peers_clone.write().unwrap();
-                        let mut new_peers = (*peers_write)
-                            .clone()
-                            .iter()
-                            .map(|(peer_host, peer)| {
-                                (
-                                    peer_host.clone(),
-                                    (peer.position.x, peer.position.y, peer.position.z),
-                                )
-                            })
-                            .collect::<Vec<_>>();
-
-                        new_peers.push((
-                            host_clone,
-                            (player.position.x, player.position.y, player.position.z),
-                        ));
-
-                        peers_write.insert(
-                            query.host.clone(),
-                            Player::new(dvec3(query.x, query.y, query.z)),
-                        );
-
-                        Json(Register { peers: new_peers })
-                    }
-                }),
-            )
-            .route(
-                "/move",
-                post({
-                    let peers_clone = peers_clone.clone();
-
-                    move |query: Query<MoveQuery>| async move {
-                        let mut peers_write = peers_clone.write().unwrap();
-
-                        peers_write.get_mut(&query.host).unwrap().position =
-                            dvec3(query.x, query.y, query.z);
-                    }
-                }),
-            );
-
         let rt = Runtime::new().unwrap();
         rt.block_on(async {
+            let app = Router::new()
+                .route(
+                    "/register",
+                    post({
+                        let peers_clone = peers_clone.clone();
+                        let host_clone = host_clone.clone();
+
+                        move |query: Query<RegisterQuery>| async move {
+                            let mut peers_write = peers_clone.write().unwrap();
+                            let mut new_peers = (*peers_write)
+                                .clone()
+                                .iter()
+                                .map(|(peer_host, peer)| {
+                                    (
+                                        peer_host.clone(),
+                                        (peer.position.x, peer.position.y, peer.position.z),
+                                    )
+                                })
+                                .collect::<Vec<_>>();
+
+                            new_peers.push((
+                                host_clone,
+                                (player.position.x, player.position.y, player.position.z),
+                            ));
+
+                            peers_write.insert(
+                                query.host.clone(),
+                                Player::new(dvec3(query.x, query.y, query.z)),
+                            );
+
+                            Json(Register { peers: new_peers })
+                        }
+                    }),
+                )
+                .route(
+                    "/move",
+                    post({
+                        let peers_clone = peers_clone.clone();
+
+                        move |query: Query<MoveQuery>| async move {
+                            let mut peers_write = peers_clone.write().unwrap();
+
+                            peers_write.get_mut(&query.host).unwrap().position =
+                                dvec3(query.x, query.y, query.z);
+                        }
+                    }),
+                );
+
             let listener = TcpListener::bind(host_clone).await.unwrap();
             serve(listener, app).await.unwrap();
         })
@@ -278,27 +278,23 @@ async fn start(
             WHITE,
         );
 
-        let peers_clone = peers.clone();
+        let peers_clone = (*peers.read().unwrap()).clone();
         let host_clone = host.clone();
         let protocol_clone = protocol.clone();
 
         if moved || player.jump.is_some() {
             spawn(move || {
-                // let proxy = Proxy::http("http://localhost:4444").unwrap();
-                let client = Client::builder().build().unwrap();
-                let peers_clone = peers_clone.read().unwrap();
-
                 let rt = Runtime::new().unwrap();
                 rt.block_on(async {
-                    for peer_host in peers_clone.keys() {
-                        let host_clone = host_clone.clone();
-                        let protocol_clone = protocol_clone.clone();
+                    // let proxy = Proxy::http("http://localhost:4444").unwrap();
+                    let client = Client::builder().build().unwrap();
 
+                    for peer_host in peers_clone.keys() {
                         let _ = client
-                            .post(protocol_clone + peer_host + "/move")
+                            .post(protocol_clone.clone() + peer_host + "/move")
                             // .timeout(Duration::from_millis(10))
                             .query(&MoveQuery {
-                                host: host_clone,
+                                host: host_clone.clone(),
                                 x: player.position.x,
                                 y: player.position.y,
                                 z: player.position.z,
