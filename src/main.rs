@@ -358,8 +358,14 @@ async fn main() {
 
                 let mut peers_write = peers_clone.write().unwrap();
 
+                let register: Register = res.json().await.unwrap();
+
+                for (peer_host, (x, y, z)) in register.peers {
+                    peers_write.insert(peer_host, Player::new(dvec3(x, y, z)));
+                }
+
                 for peer_host in peers_write.keys() {
-                    let _ = client
+                    client
                         .post(protocol_clone.clone() + peer_host + "/register")
                         .query(&RegisterQuery {
                             host: host_clone.clone(),
@@ -368,13 +374,8 @@ async fn main() {
                             z: player.position.z,
                         })
                         .send()
-                        .await;
-                }
-
-                let register: Register = res.json().await.unwrap();
-
-                for (peer_host, (x, y, z)) in register.peers {
-                    peers_write.insert(peer_host, Player::new(dvec3(x, y, z)));
+                        .await
+                        .unwrap();
                 }
             })
         })
