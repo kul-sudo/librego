@@ -2,6 +2,7 @@ use macroquad::prelude::*;
 use parry3d_f64::math::Vector;
 use std::{
     f64::consts::{FRAC_PI_2, PI},
+    sync::LazyLock,
     time::Duration,
 };
 
@@ -16,6 +17,10 @@ pub const WORLD_UP: DVec3 = DVec3::Y;
 
 pub const JUMP_VELOCITY: f64 = 0.06;
 pub const GRAVITY: f64 = 0.0035;
+
+pub const TICKS_PER_SECOND: usize = 64;
+pub static DURATION_PER_TICK: LazyLock<Duration> =
+    LazyLock::new(|| Duration::from_secs(1) / TICKS_PER_SECOND as u32);
 
 pub const CROUCH_SPEED_CONST: f64 = 0.3;
 pub const WALKING_SPEED_CONST: f64 = 0.5;

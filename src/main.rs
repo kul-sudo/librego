@@ -1,13 +1,8 @@
 mod consts;
 mod player;
 
-use ::rand::{SeedableRng, rngs::StdRng};
-use axum::{
-    Json, Router,
-    extract::Query,
-    routing::{get, post},
-    serve,
-};
+use ::rand::{Rng, SeedableRng, rngs::StdRng};
+use bincode::{Decode, Encode, config, decode_from_slice, encode_into_slice};
 use consts::*;
 use macroquad::{audio::load_sound, prelude::*};
 use parry3d_f64::{
@@ -15,15 +10,14 @@ use parry3d_f64::{
     shape::{Compound, Cuboid, SharedShape},
 };
 use player::Player;
-use reqwest::{Client, Proxy};
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     env::vars,
+    net::{SocketAddr, UdpSocket},
     sync::{Arc, RwLock},
     thread::spawn,
+    time::Instant,
 };
-use tokio::{net::TcpListener, runtime::Runtime};
 
 fn window_conf() -> Conf {
     Conf {
@@ -37,32 +31,42 @@ fn window_conf() -> Conf {
     }
 }
 
-#[derive(Serialize, Deserialize)]
-struct Register {
-    peers: Vec<(String, (f64, f64, f64))>,
+#[derive(Encode, Decode)]
+struct Peers {
+    peers: Vec<(SocketAddr, [f64; 3])>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Encode, Decode)]
 struct MoveQuery {
-    host: String,
     x: f64,
     y: f64,
     z: f64,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Encode, Decode)]
 struct RegisterQuery {
-    host: String,
     x: f64,
     y: f64,
     z: f64,
+}
+
+#[derive(Encode, Decode)]
+enum Event {
+    MoveQuery(MoveQuery),
+    RegisterQuery(RegisterQuery),
+    Killed,
+    Peers(Peers),
+}
+
+#[derive(Encode, Decode)]
+struct Packet {
+    event: Event,
 }
 
 async fn start(
     mut player: Player,
-    peers: Arc<RwLock<HashMap<String, Player>>>,
-    protocol: String,
-    host: String,
+    peers: Arc<RwLock<HashMap<SocketAddr, Player>>>,
+    socket: Arc<RwLock<UdpSocket>>,
     rng: &mut StdRng,
 ) {
     for _ in 0..8 {
@@ -73,62 +77,76 @@ async fn start(
     let screen_size = vec2(screen_width(), screen_height());
 
     let peers_clone = peers.clone();
-    let host_clone = host.clone();
+    let socket_clone = socket.clone();
+    let player_clone = player.clone();
 
     spawn(move || {
-        let rt = Runtime::new().unwrap();
-        rt.block_on(async {
-            let app = Router::new()
-                .route(
-                    "/register",
-                    post({
-                        let peers_clone = peers_clone.clone();
-                        let host_clone = host_clone.clone();
+        let socket = socket_clone.read().unwrap();
 
-                        move |query: Query<RegisterQuery>| async move {
-                            let mut peers_write = peers_clone.write().unwrap();
-                            let mut new_peers = (*peers_write)
-                                .clone()
-                                .iter()
-                                .map(|(peer_host, peer)| {
-                                    (
-                                        peer_host.clone(),
-                                        (peer.position.x, peer.position.y, peer.position.z),
-                                    )
-                                })
-                                .collect::<Vec<_>>();
+        let config = config::standard();
+        let peers_clone = peers_clone.clone();
+        let player_clone = player_clone.clone();
 
-                            new_peers.push((
-                                host_clone,
-                                (player.position.x, player.position.y, player.position.z),
-                            ));
+        loop {
+            let mut buf = [0; 100];
+            let (amt, src) = socket.recv_from(&mut buf).unwrap();
 
-                            peers_write.insert(
-                                query.host.clone(),
-                                Player::new(dvec3(query.x, query.y, query.z)),
-                            );
+            let (packet, _): (Packet, _) = decode_from_slice(&buf[..amt], config).unwrap();
 
-                            Json(Register { peers: new_peers })
-                        }
-                    }),
-                )
-                .route(
-                    "/move",
-                    post({
-                        let peers_clone = peers_clone.clone();
+            match packet.event {
+                Event::MoveQuery(query) => {
+                    let mut peers_write = peers_clone.write().unwrap();
 
-                        move |query: Query<MoveQuery>| async move {
-                            let mut peers_write = peers_clone.write().unwrap();
+                    let peer = peers_write.get_mut(&src).unwrap();
+                    peer.position = peer.position.lerp(dvec3(query.x, query.y, query.z), 0.5);
+                    peer.position.y = query.y;
+                    if peer.ticks.len() > TICKS_PER_SECOND {
+                        peer.ticks.clear()
+                    } else {
+                        peer.ticks.push(Some(peer.position))
+                    }
+                }
+                Event::RegisterQuery(query) => {
+                    let mut peers_write = peers_clone.write().unwrap();
+                    let mut new_peers = (*peers_write)
+                        .clone()
+                        .iter()
+                        .map(|(peer_host, peer)| {
+                            (
+                                peer_host.clone(),
+                                [peer.position.x, peer.position.y, peer.position.z],
+                            )
+                        })
+                        .collect::<Vec<_>>();
 
-                            peers_write.get_mut(&query.host).unwrap().position =
-                                dvec3(query.x, query.y, query.z);
-                        }
-                    }),
-                );
+                    new_peers.push((
+                        socket.local_addr().unwrap(),
+                        [
+                            player_clone.position.x,
+                            player_clone.position.y,
+                            player_clone.position.z,
+                        ],
+                    ));
 
-            let listener = TcpListener::bind(host_clone).await.unwrap();
-            serve(listener, app).await.unwrap();
-        })
+                    peers_write.insert(src, Player::new(dvec3(query.x, query.y, query.z)));
+
+                    let mut buf_send = [0; 100];
+
+                    let length = encode_into_slice(
+                        Packet {
+                            event: Event::Peers(Peers { peers: new_peers }),
+                        },
+                        &mut buf_send,
+                        config,
+                    )
+                    .unwrap();
+                    let buf_send_filled = &buf_send[..length];
+                    socket.send_to(&buf_send_filled, &src).unwrap();
+                }
+                Event::Killed => {}
+                _ => panic!(),
+            }
+        }
     });
 
     let compounds = [
@@ -189,7 +207,7 @@ async fn start(
         if grabbed {
             player.look(delta);
         }
-        player.bullets(&compound, &bullet_sound, moved, rng);
+        player.bullets(peers.clone(), &bullet_sound, moved, rng);
 
         clear_background(BLACK);
 
@@ -206,12 +224,12 @@ async fn start(
         {
             let peers_read = peers_clone.read().unwrap();
 
-            for other_player in peers_read.values() {
+            for peer in peers_read.values() {
                 draw_cube(
-                    other_player.position.as_vec3(),
+                    peer.position.as_vec3(),
                     DVec3::from_slice(PLAYER_SIZE.as_slice()).as_vec3() * 2.0,
                     None,
-                    RED,
+                    if peer.killed { GRAY } else { RED },
                 );
             }
         }
@@ -279,31 +297,36 @@ async fn start(
         );
 
         let peers_clone = (*peers.read().unwrap()).clone();
-        let host_clone = host.clone();
-        let protocol_clone = protocol.clone();
 
-        if moved || player.jump.is_some() {
-            spawn(move || {
-                let rt = Runtime::new().unwrap();
-                rt.block_on(async {
-                    // let proxy = Proxy::http("http://localhost:4444").unwrap();
-                    let client = Client::builder().build().unwrap();
+        let config = config::standard();
 
-                    for peer_host in peers_clone.keys() {
-                        let _ = client
-                            .post(protocol_clone.clone() + peer_host + "/move")
-                            // .timeout(Duration::from_millis(10))
-                            .query(&MoveQuery {
-                                host: host_clone.clone(),
-                                x: player.position.x,
-                                y: player.position.y,
-                                z: player.position.z,
-                            })
-                            .send()
-                            .await;
-                    }
-                })
-            });
+        if player.last_tick_timestamp.elapsed() >= *DURATION_PER_TICK {
+            player.last_tick_timestamp = Instant::now();
+            if player.ticks.len() > TICKS_PER_SECOND {
+                player.ticks.clear()
+            } else {
+                player.ticks.push(Some(player.position))
+            }
+
+            let mut buf_send = [0; 100];
+            let length = encode_into_slice(
+                Packet {
+                    event: Event::MoveQuery(MoveQuery {
+                        x: player.position.x,
+                        y: player.position.y,
+                        z: player.position.z,
+                    }),
+                },
+                &mut buf_send,
+                config,
+            )
+            .unwrap();
+            let buf_send_filled = &buf_send[..length];
+
+            let socket_read = socket.read().unwrap();
+            for peer_host in peers_clone.keys() {
+                socket_read.send_to(&buf_send_filled, peer_host).unwrap();
+            }
         }
 
         next_frame().await
@@ -323,65 +346,49 @@ async fn main() {
         .find(|(key, _)| key == "HOST")
         .expect("HOST must be specified.")
         .1;
-    let protocol = vars()
-        .find(|(key, _)| key == "PROTOCOL")
-        .expect("PROTOCOL must be specified.")
-        .1
-        + "://";
+    let socket = Arc::new(RwLock::new(UdpSocket::bind(&host).unwrap()));
 
-    let peers = Arc::new(RwLock::new(HashMap::<String, Player>::new()));
+    let peers = Arc::new(RwLock::new(HashMap::<SocketAddr, Player>::new()));
 
-    let player = Player::new(dvec3(0.0, PLAYER_SIZE.y, 0.0));
+    let mut player = Player::new(dvec3(0.0, PLAYER_SIZE.y, 0.0));
 
     if let Some(server) = server {
-        let peers_clone = peers.clone();
-        let host_clone = host.clone();
-        let protocol_clone = protocol.clone();
+        let config = config::standard();
 
-        spawn(move || {
-            // let proxy = Proxy::http("http://localhost:4444").unwrap();
-            let client = Client::builder().build().unwrap();
-
-            let rt = Runtime::new().unwrap();
-            rt.block_on(async {
-                let res = client
-                    .post(protocol_clone.clone() + &server + "/register")
-                    .query(&RegisterQuery {
-                        host: host_clone.clone(),
-                        x: player.position.x,
-                        y: player.position.y,
-                        z: player.position.z,
-                    })
-                    .send()
-                    .await
-                    .unwrap();
-
-                let mut peers_write = peers_clone.write().unwrap();
-
-                let register: Register = res.json().await.unwrap();
-
-                for (peer_host, (x, y, z)) in register.peers {
-                    peers_write.insert(peer_host, Player::new(dvec3(x, y, z)));
-                }
-
-                for peer_host in peers_write.keys() {
-                    client
-                        .post(protocol_clone.clone() + peer_host + "/register")
-                        .query(&RegisterQuery {
-                            host: host_clone.clone(),
-                            x: player.position.x,
-                            y: player.position.y,
-                            z: player.position.z,
-                        })
-                        .send()
-                        .await
-                        .unwrap();
-                }
-            })
-        })
-        .join()
+        let mut buf_send = [0; 100];
+        let length = encode_into_slice(
+            Packet {
+                event: Event::RegisterQuery(RegisterQuery {
+                    x: player.position.x,
+                    y: player.position.y,
+                    z: player.position.z,
+                }),
+            },
+            &mut buf_send,
+            config,
+        )
         .unwrap();
+        let buf_send_filled = &buf_send[..length];
+        let socket_read = socket.read().unwrap();
+        socket_read.send_to(&buf_send_filled, server).unwrap();
+
+        let mut buf = [0; 100];
+        let (amt, src) = socket_read.recv_from(&mut buf).unwrap();
+
+        let (packet, _): (Packet, _) = decode_from_slice(&buf[..amt], config).unwrap();
+        if let Event::Peers(query) = packet.event {
+            let mut peers_write = peers.write().unwrap();
+
+            for (peer_host, pos) in query.peers {
+                if peer_host != src {
+                    socket_read.send_to(&buf_send_filled, &peer_host).unwrap();
+                }
+                peers_write.insert(peer_host, Player::new(DVec3::from_slice(&pos)));
+            }
+        } else {
+            panic!()
+        }
     }
 
-    start(player, peers, protocol, host, &mut rng).await;
+    start(player, peers, socket, &mut rng).await;
 }

@@ -9,7 +9,12 @@ use parry3d_f64::{
     query::{Ray, RayCast, contact},
     shape::{Compound, Cuboid},
 };
-use std::time::Instant;
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 
 #[derive(Clone)]
 pub struct Player {
@@ -27,6 +32,9 @@ pub struct Player {
     pub bullets_since_last_reload: u8,
     pub last_reload_timestamp: Option<Instant>,
     pub mouse_position: DVec2,
+    pub ticks: Vec<Option<DVec3>>,
+    pub last_tick_timestamp: Instant,
+    pub killed: bool,
 }
 
 impl Player {
@@ -57,6 +65,9 @@ impl Player {
             bullets_since_last_reload: 0,
             last_reload_timestamp: None,
             mouse_position: DVec2::ZERO,
+            ticks: Vec::with_capacity(TICKS_PER_SECOND as usize),
+            last_tick_timestamp: Instant::now(),
+            killed: false,
         }
     }
 
@@ -225,7 +236,7 @@ impl Player {
 
     pub fn bullets(
         &mut self,
-        compound: &Compound,
+        peers: Arc<RwLock<HashMap<SocketAddr, Player>>>,
         bullet_sound: &Sound,
         moved: bool,
         rng: &mut StdRng,
@@ -275,19 +286,25 @@ impl Player {
                 ),
             );
 
-            if compound
-                .cast_ray(&Isometry::identity(), &ray, f64::INFINITY, true)
-                .is_some()
-            {
-                // ray.origin = ray.point_at(time);
-                // self.bullets.insert(
-                //     now,
-                //     Bullet {
-                //         ray,
-                //         born: Instant::now(),
-                //     },
-                // );
-            };
+            let mut peers_write = peers.write().unwrap();
+
+            for peer in peers_write.values_mut() {
+                for tick in &peer.ticks {
+                    if let Some(position) = tick {
+                        if Cuboid::new(PLAYER_SIZE * 2.0)
+                            .cast_ray(
+                                &Isometry::translation(position.x, position.y, position.z),
+                                &ray,
+                                f64::INFINITY,
+                                true,
+                            )
+                            .is_some()
+                        {
+                            peer.killed = true;
+                        }
+                    }
+                }
+            }
 
             play_sound_once(bullet_sound);
         }
